@@ -17,22 +17,33 @@ $ ./target/release/reversi-engine --help
 Usage: reversi-engine [OPTIONS]
 
 Options:
-  -a, --api-url <API_URL>              API base URL, e. g. http://example.com:8080/ [default: ]
-  -p, --player-uuid <PLAYER_UUID>      Player UUID as provided by server API [default: ]
-  -s, --search-depth <SEARCH_DEPTH>    Search depth [default: 8]
-  -b, --book-path <BOOK_PATH>          Opening book path [default: ]
-  -g, --generate-book                  Whether to generate an opening book
-  -f, --full-depth <FULL_DEPTH>        When generating an opening book, how deeply to evaluate all moves [default: 5]
-  -p, --partial-depth <PARTIAL_DEPTH>  When generating an opening book, how deeply to analyze main lines [default: 7]
-  -h, --help                           Print help
-  -V, --version                        Print version
+  -a, --api-url <API_URL>
+          API base URL, e. g. http://example.com:8080/ [default: ]
+  -p, --player-uuid <PLAYER_UUID>
+          Player UUID as provided by server API [default: ]
+  -s, --search-depth <SEARCH_DEPTH>
+          Search depth [default: 8]
+  -b, --book-path <BOOK_PATH>
+          Opening book path [default: ]
+  -g, --generate-book
+          Whether to generate an opening book
+  -f, --full-depth <FULL_DEPTH>
+          When generating an opening book, how deeply to evaluate all moves [default: 5]
+  -k, --k-partial-depth <K_PARTIAL_DEPTH>
+          When generating an opening book, how deeply to analyze main lines [default: 7]
+  -h, --help
+          Print help
+  -V, --version
+          Print version
 ```
 
 ### Playing against itself
 
 ```bash
 ./target/release/reversi-engine -s 8
-./target/release/reversi-engine -s 8 -b ./reversi-book.json
+
+xz -d < examples/opening-book.json.xz > opening-book.json
+./target/release/reversi-engine -s 8 -b opening-book.json
 ```
 
 ### Playing a game on a Reversi server
@@ -42,5 +53,5 @@ Options:
 
 ### Generating an opening book
 ```bash
-./target/release/reversi-engine --generate-book -f 5 -p 5 -s 10 -b ./5_10.json
+./target/release/reversi-engine --generate-book -k 5 -p 5 -s 10 -b ./5_10.json
 ```

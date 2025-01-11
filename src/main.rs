@@ -1,6 +1,7 @@
 use chrono;
 use clap::Parser;
 use rayon::prelude::*;
+use std::path::Path;
 
 mod model;
 use model::*;
@@ -39,7 +40,7 @@ struct Args {
 
     #[arg(short, long, default_value_t = 7)]
     /// When generating an opening book, how deeply to analyze main lines
-    partial_depth: u32,
+    k_partial_depth: u32,
 }
 
 fn print_board(white: u64, black: u64, last_move: u64, flips: u64, mark_last_move: bool) {
@@ -840,11 +841,18 @@ fn generate_opening_book(
     partial_depth: u32,
     save_path: &str,
 ) {
+    println!("Generating opening book;calc depth: {}, full search depth: {}, partial search depth: {}, path: {}", calculation_depth, full_depth, partial_depth, save_path);
     let black = 0x0000000810000000u64;
     let white = 0x0000001008000000u64;
     let white_to_move: bool = false;
     let mut queue: Vec<Position> = Vec::new();
-    let mut book: OpeningBook = OpeningBook::default();
+    let mut book: OpeningBook;
+    if Path::new(save_path).exists() {
+        book = OpeningBook::load_from_file(save_path).unwrap();
+    } else {
+        book = OpeningBook::default();
+    }
+
     let starting_pos: Position = Position {
         black: black,
         white: white,
@@ -853,7 +861,7 @@ fn generate_opening_book(
     queue.push(starting_pos);
     for depth in 0..partial_depth {
         let mut next_queue: Vec<Position> = Vec::new();
-        println!("{:?} Reached depth {}", chrono::offset::Local::now(), depth);
+        println!("{:?} Reached depth {} with {} positions", chrono::offset::Local::now(), depth, queue.len());
         for pos in queue {
             println!(
                 "{:?} Evaluating new position: b {} w {} wtm: {}",
@@ -1319,10 +1327,11 @@ fn main() {
     let args = Args::parse();
     if args.generate_book {
         if args.book_path.as_str() != "" {
+            println!("{} {} {} {}", args.search_depth, args.full_depth, args.k_partial_depth, args.book_path);
             generate_opening_book(
                 args.search_depth,
                 args.full_depth,
-                args.partial_depth,
+                args.k_partial_depth,
                 args.book_path.as_str(),
             );
         } else {
