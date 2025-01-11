@@ -861,7 +861,12 @@ fn generate_opening_book(
     queue.push(starting_pos);
     for depth in 0..partial_depth {
         let mut next_queue: Vec<Position> = Vec::new();
-        println!("{:?} Reached depth {} with {} positions", chrono::offset::Local::now(), depth, queue.len());
+        println!(
+            "{:?} Reached depth {} with {} positions",
+            chrono::offset::Local::now(),
+            depth,
+            queue.len()
+        );
         for pos in queue {
             println!(
                 "{:?} Evaluating new position: b {} w {} wtm: {}",
@@ -1327,7 +1332,10 @@ fn main() {
     let args = Args::parse();
     if args.generate_book {
         if args.book_path.as_str() != "" {
-            println!("{} {} {} {}", args.search_depth, args.full_depth, args.k_partial_depth, args.book_path);
+            println!(
+                "{} {} {} {}",
+                args.search_depth, args.full_depth, args.k_partial_depth, args.book_path
+            );
             generate_opening_book(
                 args.search_depth,
                 args.full_depth,
