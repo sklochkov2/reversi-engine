@@ -1067,7 +1067,7 @@ fn local_game(args: Args) {
     }
 }
 
-fn find_games_to_join(args: &Args) -> Vec<String> {
+fn find_games_to_join(args: &Args) -> Result<Vec<String>, ureq::Error> {
     let mut res: Vec<String> = Vec::new();
     let api_endpoint: String = args.api_url.clone() + "reversi/v1/game_list";
     println!("{}", api_endpoint);
@@ -1075,50 +1075,44 @@ fn find_games_to_join(args: &Args) -> Vec<String> {
         player_id: args.player_uuid.clone(),
     };
     let list_games_result: GameListResponse = ureq::post(api_endpoint.as_str())
-        .send_json(&join_request)
-        .unwrap()
+        .send_json(&join_request)?
         .body_mut()
-        .read_json::<GameListResponse>()
-        .unwrap();
+        .read_json::<GameListResponse>()?;
     for game in list_games_result.result {
         if game.first_player != args.player_uuid {
             res.push(game.game_id);
         }
     }
-    res
+    Ok(res)
 }
 
-fn create_game(args: &Args) -> NewGameResult {
+fn create_game(args: &Args) -> Result<NewGameResult, ureq::Error> {
     let api_endpoint: String = args.api_url.clone() + "reversi/v1/create_game";
     let create_request: NewGameRequest = NewGameRequest {
         player_id: args.player_uuid.clone(),
     };
     let created_game: NewGameResponse = ureq::post(api_endpoint.as_str())
-        .send_json(&create_request)
-        .unwrap()
+        .send_json(&create_request)?
         .body_mut()
-        .read_json::<NewGameResponse>()
-        .unwrap();
-    created_game.result
+        .read_json::<NewGameResponse>()?;
+    Ok(created_game.result)
 }
 
-fn join_game(args: &Args, game_uuid: String) -> GameJoinResult {
+fn join_game(args: &Args, game_uuid: String) -> Result<GameJoinResult, ureq::Error> {
     let api_endpoint: String = args.api_url.clone() + "reversi/v1/join";
     let game_request: GameRequest = GameRequest {
         player_id: args.player_uuid.clone(),
         game_id: game_uuid.clone(),
     };
     let joined_game: GameJoinResponse = ureq::post(api_endpoint.as_str())
-        .send_json(&game_request)
-        .unwrap()
+        .send_json(&game_request)?
         .body_mut()
-        .read_json::<GameJoinResponse>()
-        .unwrap();
-    joined_game.result
+        .read_json::<GameJoinResponse>()?;
+    Ok(joined_game.result)
 }
 
 //make_move(&args, game.clone(), nxt_move_algebraic.clone());
-fn make_move(args: &Args, game_uuid: String, our_move: String) -> MoveResult {
+fn make_move(args: &Args, game_uuid: String, our_move: String) -> Result<MoveResult, ureq::Error> {
     let api_endpoint: String = args.api_url.clone() + "reversi/v1/move";
     let move_request: MoveRequest = MoveRequest {
         player_id: args.player_uuid.clone(),
@@ -1126,33 +1120,39 @@ fn make_move(args: &Args, game_uuid: String, our_move: String) -> MoveResult {
         r#move: our_move.clone(),
     };
     let move_response: MoveResponse = ureq::post(api_endpoint.as_str())
-        .send_json(&move_request)
-        .unwrap()
+        .send_json(&move_request)?
         .body_mut()
-        .read_json::<MoveResponse>()
-        .unwrap();
-    move_response.result
+        .read_json::<MoveResponse>()?;
+    Ok(move_response.result)
 }
 
-fn get_game_status(args: &Args, game_uuid: String) -> GameStatusResult {
+fn get_game_status(args: &Args, game_uuid: String) -> Result<GameStatusResult, ureq::Error> {
     let api_endpoint: String = args.api_url.clone() + "reversi/v1/game_status";
     let game_request: GameRequest = GameRequest {
         player_id: args.player_uuid.clone(),
         game_id: game_uuid.clone(),
     };
     let status: GameStatusResponse = ureq::post(api_endpoint.as_str())
-        .send_json(&game_request)
-        .unwrap()
+        .send_json(&game_request)?
         .body_mut()
-        .read_json::<GameStatusResponse>()
-        .unwrap();
-    status.result
+        .read_json::<GameStatusResponse>()?;
+    Ok(status.result)
 }
 
 //GameStatusResult = wait_for_response(&args, game.clone(), my_color.clone());
 fn wait_for_response(args: &Args, game_uuid: String, my_color: String) -> GameStatusResult {
     loop {
-        let curr_result: GameStatusResult = get_game_status(args, game_uuid.clone());
+        let curr_result: GameStatusResult;
+        match get_game_status(args, game_uuid.clone()) {
+            Ok(g) => {
+                curr_result = g;
+            }
+            Err(e) => {
+                println!("Failed to fetch game status, retrying: {}", e);
+                thread::sleep(time::Duration::from_millis(1000));
+                continue;
+            }
+        }
         if curr_result.status == my_color
             || curr_result.status == "black_won".to_string()
             || curr_result.status == "white_won".to_string()
@@ -1165,7 +1165,17 @@ fn wait_for_response(args: &Args, game_uuid: String, my_color: String) -> GameSt
 
 fn wait_for_joining_player(args: &Args, game_uuid: String) -> GameStatusResult {
     loop {
-        let curr_result: GameStatusResult = get_game_status(args, game_uuid.clone());
+        let curr_result: GameStatusResult;
+        match get_game_status(args, game_uuid.clone()) {
+            Ok(g) => {
+                curr_result = g;
+            }
+            Err(e) => {
+                println!("Failed to fetch game status, retrying: {}", e);
+                thread::sleep(time::Duration::from_millis(1000));
+                continue;
+            }
+        }
         if curr_result.status != "pending".to_string() {
             return curr_result;
         }
@@ -1178,13 +1188,37 @@ fn play_multiplayer(args: Args) {
         "{} {} {} {}",
         args.api_url, args.search_depth, args.book_path, args.player_uuid
     );
-    let games: Vec<String> = find_games_to_join(&args);
+    let games: Vec<String>;
+    loop {
+        match find_games_to_join(&args) {
+            Ok(g) => {
+                games = g;
+                break;
+            }
+            Err(e) => {
+                println!("Failed to retrieve game list, retrying: {}", e);
+                thread::sleep(time::Duration::from_millis(1000));
+            }
+        }
+    }
     let mut my_game_uuid: String = String::new();
     let mut my_color: String = String::new();
     let mut opp_first_move: u64 = 0;
     if games.len() == 0 {
         println!("No games to join, creating one!");
-        let new_game: NewGameResult = create_game(&args);
+        let new_game: NewGameResult;
+        loop {
+            match create_game(&args) {
+                Ok(g) => {
+                    new_game = g;
+                    break;
+                }
+                Err(e) => {
+                    println!("Error while creating a game, retrying: {}", e);
+                    thread::sleep(time::Duration::from_millis(1000));
+                }
+            }
+        }
         my_game_uuid = new_game.game_id;
         my_color = new_game.color;
         println!("Waiting for ooponent to join");
@@ -1194,7 +1228,19 @@ fn play_multiplayer(args: Args) {
         }
     } else {
         for game in games {
-            let joined_game: GameJoinResult = join_game(&args, game.clone());
+            let joined_game: GameJoinResult;
+            loop {
+                match join_game(&args, game.clone()) {
+                    Ok(g) => {
+                        joined_game = g;
+                        break;
+                    }
+                    Err(e) => {
+                        println!("Error while joining a game, retrying: {}", e);
+                        thread::sleep(time::Duration::from_millis(1000));
+                    }
+                }
+            }
             if joined_game.result {
                 my_game_uuid = game.clone();
                 my_color = joined_game.color;
@@ -1285,8 +1331,19 @@ fn play_multiplayer(args: Args) {
                         nxt_move_algebraic = "resign".to_string();
                     }
                 }
-                let move_result: MoveResult =
-                    make_move(&args, my_game_uuid.clone(), nxt_move_algebraic.clone());
+                let move_result: MoveResult;
+                loop {
+                    match make_move(&args, my_game_uuid.clone(), nxt_move_algebraic.clone()) {
+                        Ok(g) => {
+                            move_result = g;
+                            break;
+                        }
+                        Err(e) => {
+                            println!("Error while making a move, retrying: {}", e);
+                            thread::sleep(time::Duration::from_millis(1000));
+                        }
+                    }
+                }
                 if !move_result.r#continue {
                     println!("Game ended, {} won!", move_result.winner);
                     println!(
