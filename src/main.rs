@@ -383,20 +383,16 @@ fn check_game_status_alt(white: u64, black: u64, is_white_move: bool) -> u64 {
     }
     let opp_moves: u64 = compute_moves(opp, me);
     if opp_moves > 0 {
-        println!("AAAAAA");
         return u64::MAX;
     }
     let white_count = white.count_ones();
     let black_count = black.count_ones();
 
     if white_count > black_count {
-        println!("BBBBBB");
         return u64::MAX - 2;
     } else if black_count > white_count {
-        println!("CCCCCCC");
         return u64::MAX - 1;
     } else {
-        println!("DDDDDD");
         return u64::MAX - 3;
     };
 }
