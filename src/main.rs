@@ -339,54 +339,6 @@ pub fn find_legal_moves_alt(white: u64, black: u64, is_white_to_move: bool) -> V
     result
 }
 
-/*fn has_valid_moves(player: u64, opponent: u64) -> bool {
-    const DIRECTIONS: [(i32, i32); 8] = [
-        (-1, -1),
-        (-1, 0),
-        (-1, 1),
-        (0, -1),
-        (0, 1),
-        (1, -1),
-        (1, 0),
-        (1, 1),
-    ];
-
-    for pos in 0..64 {
-        let move_bit = 1u64 << pos;
-
-        if (player | opponent) & move_bit != 0 {
-            continue;
-        }
-
-        for &(dx, dy) in DIRECTIONS.iter() {
-            let mut x = (pos % 8) as i32 + dx;
-            let mut y = (pos / 8) as i32 + dy;
-            let mut found_opponent = false;
-
-            while x >= 0 && x < 8 && y >= 0 && y < 8 {
-                let index = (y * 8 + x) as usize;
-                let bit = 1u64 << index;
-
-                if (opponent & bit) != 0 {
-                    found_opponent = true;
-                } else if (player & bit) != 0 {
-                    if found_opponent {
-                        return true;
-                    }
-                    break;
-                } else {
-                    break;
-                }
-
-                x += dx;
-                y += dy;
-            }
-        }
-    }
-
-    false
-}*/
-
 fn check_game_status(white: u64, black: u64) -> u32 {
     let all_discs = white | black;
 
@@ -406,7 +358,6 @@ fn check_game_status(white: u64, black: u64) -> u32 {
     if compute_moves(white, black) > 0 || compute_moves(black, white) > 0 {
         3
     } else {
-        //println!("DDD {} {}", white, black);
         let player_count = white.count_ones();
         let opponent_count = black.count_ones();
 
@@ -432,16 +383,20 @@ fn check_game_status_alt(white: u64, black: u64, is_white_move: bool) -> u64 {
     }
     let opp_moves: u64 = compute_moves(opp, me);
     if opp_moves > 0 {
+        println!("AAAAAA");
         return u64::MAX;
     }
     let white_count = white.count_ones();
     let black_count = black.count_ones();
 
     if white_count > black_count {
+        println!("BBBBBB");
         return u64::MAX - 2;
     } else if black_count > white_count {
+        println!("CCCCCCC");
         return u64::MAX - 1;
     } else {
+        println!("DDDDDD");
         return u64::MAX - 3;
     };
 }
@@ -508,15 +463,6 @@ fn search_moves_par(
     }
     let possible_moves: Vec<u64> = find_legal_moves_alt(white, black, is_white_move);
     if possible_moves.len() == 0 {
-        if outcome == 1 {
-            return (u64::MAX, -1000);
-        }
-        if outcome == 2 {
-            return (u64::MAX, 1000);
-        }
-        if outcome == 0 {
-            return (u64::MAX, 0);
-        }
         if outcome == 3 {
             if depth == orig_depth {
                 return (u64::MAX, eval_position(white, black));
@@ -612,124 +558,6 @@ fn search_moves_par(
         );
     (best_move, best_orig_eval)
 }
-
-/*
-fn search_moves(
-    white: u64,
-    black: u64,
-    is_white_move: bool,
-    depth: u32,
-    alpha: i32,
-    beta: i32,
-    orig_depth: u32,
-) -> (u64, i32) {
-    let outcome = check_game_status(white, black);
-    if outcome == 1 {
-        return (u64::MAX, -1000);
-    } else if outcome == 2 {
-        return (u64::MAX, 1000);
-    } else if outcome == 0 {
-        return (u64::MAX, 0);
-    }
-    let possible_moves: Vec<u64> = find_legal_moves_alt(white, black, is_white_move);
-    if possible_moves.len() == 0 {
-        if outcome == 1 {
-            return (u64::MAX, -1000);
-        }
-        if outcome == 2 {
-            return (u64::MAX, 1000);
-        }
-        if outcome == 0 {
-            return (u64::MAX, 0);
-        }
-        if outcome == 3 {
-            if depth == orig_depth {
-                return (u64::MAX, eval_position(white, black));
-            }
-            if depth > 0 {
-                return search_moves(
-                    white,
-                    black,
-                    !is_white_move,
-                    depth - 1,
-                    alpha,
-                    beta,
-                    orig_depth,
-                );
-            } else {
-                return search_moves(white, black, !is_white_move, depth, alpha, beta, orig_depth);
-            }
-        }
-    }
-    let mut best_move: u64 = 0;
-    let mut best_eval: i32 = i32::MIN;
-    let mut best_orig_eval: i32 = 0;
-    let mut local_alpha = alpha;
-    let mut local_beta = beta;
-    for candidate in possible_moves {
-        let next_white: u64;
-        let next_black: u64;
-        let new_pos_opt = apply_move_opt(white, black, candidate, is_white_move);
-        match new_pos_opt {
-            Ok((w, b)) => {
-                next_white = w;
-                next_black = b;
-            }
-            Err(_) => {
-                continue;
-            }
-        }
-        let eval: i32;
-        let mut orig_eval: i32;
-        if depth == 0 {
-            orig_eval = eval_position(next_white, next_black);
-        } else {
-            let new_move: u64;
-            (new_move, orig_eval) = search_moves(
-                next_white,
-                next_black,
-                !is_white_move,
-                depth - 1,
-                local_alpha,
-                local_beta,
-                orig_depth,
-            );
-            if new_move == 0 {
-                continue;
-            }
-        }
-        if orig_eval > 500 {
-            orig_eval -= 1;
-        } else if orig_eval < -500 {
-            orig_eval += 1;
-        }
-        if is_white_move {
-            eval = -1 * orig_eval;
-        } else {
-            eval = orig_eval;
-        }
-        if eval > best_eval {
-            best_orig_eval = orig_eval;
-            best_eval = eval;
-            best_move = candidate;
-            if is_white_move {
-                if orig_eval < local_alpha {
-                    return (candidate, orig_eval);
-                } else {
-                    local_beta = orig_eval;
-                }
-            } else {
-                if orig_eval > local_beta {
-                    return (candidate, orig_eval);
-                } else {
-                    local_alpha = orig_eval;
-                }
-            }
-        }
-    }
-    (best_move, best_orig_eval)
-}
-*/
 
 fn search_moves_opt(
     white: u64,
@@ -1052,11 +880,11 @@ fn local_game(args: Args) {
                 let white_score = new_white.count_ones();
                 println!("Black score: {}, white score: {}", black_score, white_score);
                 if game_status == 1 {
-                    println!("White won");
+                    println!("White won b {} w {}", new_black, new_white);
                 } else if game_status == 2 {
-                    println!("Black won");
+                    println!("Black won b {} w {}", new_black, new_white);
                 } else if game_status == 0 {
-                    println!("Draw");
+                    println!("Draw b {} w {}", new_black, new_white);
                 }
                 break;
             }
@@ -1406,5 +1234,289 @@ fn main() {
         local_game(args);
     } else {
         play_multiplayer(args);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_move_to_algebraic() {
+        assert_eq!(move_to_algebraic(1).unwrap(), "a1");
+        assert_eq!(move_to_algebraic(4).unwrap(), "c1");
+        assert_eq!(move_to_algebraic(3), None);
+    }
+
+    #[test]
+    fn test_move_to_bitmap() {
+        assert_eq!(move_to_bitmap("a1").unwrap(), 1);
+        assert_eq!(move_to_bitmap("foo"), Err("Invalid move notation"));
+    }
+
+    #[test]
+    fn test_eval_position() {
+        assert_eq!(eval_position(4325574457067520514, 33909430323788925), 7);
+    }
+
+    /// Helper bitwise shift functions which do not take board edges into account
+    /// unlike similar functions from the base program.
+
+    fn shift_left(x: u64) -> u64 {
+        x << 1
+    }
+
+    fn shift_right(x: u64) -> u64 {
+        x >> 1
+    }
+
+    fn shift_up(x: u64) -> u64 {
+        x << 8
+    }
+
+    fn shift_down(x: u64) -> u64 {
+        x >> 8
+    }
+
+    #[test]
+    fn test_flip_in_dir_basic_single_flip_left() {
+        let move_bit = 0b0010_0000;
+        let me       = 0b1000_0000;
+        let opp      = 0b0100_0000;
+
+        let flipped = flip_in_dir(move_bit, me, opp, shift_left);
+        assert_eq!(flipped, 0b0100_0000); // We expect exactly the opp bit to flip.
+    }
+
+    #[test]
+    fn test_flip_in_dir_no_flip_left() {
+        let move_bit = 0b0001_0000;
+        let me       = 0b1000_0000;
+        let opp      = 0b0010_0000;
+
+        let flipped = flip_in_dir(move_bit, me, opp, shift_left);
+        assert_eq!(flipped, 0); // No valid chain, so nothing flips.
+    }
+
+    #[test]
+    fn test_flip_in_dir_multiple_flips_left() {
+        let move_bit = 0b0000_1000;
+        let opp      = 0b0111_0000;
+        let me       = 0b1000_0000;
+
+        let flipped = flip_in_dir(move_bit, me, opp, shift_left);
+        assert_eq!(flipped, 0b0111_0000);
+    }
+
+    #[test]
+    fn test_flip_in_dir_interrupted_chain_left() {
+        let move_bit = 0b0000_1000;
+        let opp      = 0b0010_0000;
+        let me       = 0b1000_0000;
+
+        let flipped = flip_in_dir(move_bit, me, opp, shift_left);
+        assert_eq!(flipped, 0);
+    }
+
+    #[test]
+    fn test_flip_in_dir_basic_single_flip_right() {
+        let move_bit = 0x800;
+        let opp      = 0x400;
+        let me       = 0x200;
+
+        let flipped = flip_in_dir(move_bit, me, opp, shift_right);
+        assert_eq!(flipped, 0x400);
+    }
+
+    #[test]
+    fn test_flip_in_dir_basic_single_flip_up() {
+        let move_bit = 0x0001;
+        let opp      = 0x0100;
+        let me       = 0x010000;
+
+        let flipped = flip_in_dir(move_bit, me, opp, shift_up);
+        assert_eq!(flipped, 0x0100);
+    }
+
+    #[test]
+    fn test_flip_in_dir_no_flip_up_due_to_gap() {
+        let move_bit = 0x0001;
+        let opp      = 0x0200;
+        let me       = 0x010000;
+
+        let flipped = flip_in_dir(move_bit, me, opp, shift_up);
+        assert_eq!(flipped, 0);
+    }
+
+    #[test]
+    fn test_flip_in_dir_multiple_flips_down() {
+        let move_bit = 0x1000000000000000;
+        let opp      = 0x0010000000000000 | 0x0000100000000000;
+        let me       = 0x0000001000000000;
+
+        let flipped = flip_in_dir(move_bit, me, opp, shift_down);
+        assert_eq!(flipped, opp);
+    }
+
+    #[test]
+    fn test_apply_move_opt() {
+        assert_eq!(apply_move_opt(35253361508352, 171935537184, move_to_bitmap("c4").unwrap(), true).unwrap(), (35253562834944, 171801319456));
+        assert_eq!(apply_move_opt(35253361508352, 171935537184, move_to_bitmap("a1").unwrap(), true), Err("No flips!"));
+        assert_eq!(apply_move_opt(35253361508352, 171935537184, move_to_bitmap("a3").unwrap(), true), Err("Square already occupied"));
+    }
+
+    #[test]
+    fn test_compute_moves_no_possible_moves() {
+        let me  = 0x1;
+        let opp = 0x2;
+
+        print_board(me, opp, 0, 0, false);
+        let moves = compute_moves(opp, me);
+        assert_eq!(moves, 0, "Expected no moves, got some bits set instead.");
+    }
+
+    #[test]
+    fn test_compute_moves_simple_horizontal() {
+        let me  = 1 << 3;
+        let opp = (1 << 2) | (1 << 1);
+
+        let moves = compute_moves(me, opp);
+        assert_eq!(moves, 1, "Expected bit 0 to be a valid move, but got something else.");
+    }
+
+    #[test]
+    fn test_compute_moves_standard_othello_black_to_move() {
+        // Black pieces (me)
+        let me = (1 << 28) | (1 << 35);
+        // White pieces (opp)
+        let opp = (1 << 27) | (1 << 36);
+
+        let moves = compute_moves(me, opp);
+
+        let expected_moves = (1 << 19) | (1 << 26) | (1 << 37) | (1 << 44);
+
+        assert_eq!(moves, expected_moves,
+            "Black's standard opening moves did not match the expected bitmask."
+        );
+    }
+
+    #[test]
+    fn test_compute_moves_standard_othello_white_to_move() {
+        // White pieces (me)
+        let me = (1 << 27) | (1 << 36);
+        // Black pieces (opp)
+        let opp = (1 << 28) | (1 << 35);
+
+        let moves = compute_moves(me, opp);
+
+        let expected_moves = (1 << 20) | (1 << 29) | (1 << 34) | (1 << 43);
+        assert_eq!(moves, expected_moves,
+            "White's standard opening moves did not match the expected bitmask."
+        );
+    }
+
+    #[test]
+    fn test_compute_moves_all_filled_but_one() {
+        let empty_bit = 12;
+        let all_board = u64::MAX;
+        let me  = all_board & !(1 << empty_bit) & !(1 << 10) & !(1 << 11);
+        let opp = (1 << 10) | (1 << 11);
+        print_board(me, opp, 0, 0, false);
+        let moves = compute_moves(opp, me);
+        assert_eq!(moves, 0,
+            "Expected no valid moves on a nearly full board, got a nonzero mask."
+        );
+    }
+
+    #[test]
+    fn test_check_game_status_alt_current_player_has_moves() {
+        let white = (1 << 27) | (1 << 36); // (3,3) and (4,4)
+        let black = (1 << 28) | (1 << 35); // (3,4) and (4,3)
+        let is_white_move = true;
+
+        let expected_moves = (1 << 20) | (1 << 29) | (1 << 34) | (1 << 43);
+
+        let status = check_game_status_alt(white, black, is_white_move);
+        assert_eq!(
+            status,
+            expected_moves,
+            "Expected White's standard opening moves, got something else."
+        );
+    }
+
+    #[test]
+    fn test_check_game_status_alt_current_player_has_no_moves_opponent_does() {
+        let white = 0x0000_FFFF_FFFF_F000u64;
+        let black = 0x0000_0000_0000_FFFFu64;
+
+        let is_white_move = true;
+
+        let status = check_game_status_alt(white, black, is_white_move);
+        assert_eq!(
+            status,
+            u64::MAX,
+            "Expected pass situation (u64::MAX) if current player has no moves but opponent does."
+        );
+    }
+
+    #[test]
+    fn test_check_game_status_alt_both_sides_have_no_moves_white_wins() {
+        let white = 14260085270048145407;
+        let black = 67108864;
+        let is_white_move = true;
+
+        let status = check_game_status_alt(white, black, is_white_move);
+        assert_eq!(
+            status,
+            u64::MAX - 2,
+            "Expected White to win => (u64::MAX - 2). Got something else."
+        );
+    }
+
+    #[test]
+    fn test_check_game_status_alt_both_sides_have_no_moves_black_wins() {
+        let white = 67108864;
+        let black = 14260085270048145407;
+
+        let is_white_move = false;
+        print_board(white, black, 0, 0, false);
+
+        let status = check_game_status_alt(white, black, is_white_move);
+        assert_eq!(
+            status,
+            u64::MAX - 1,
+            "Expected Black to win => (u64::MAX - 1). Got something else."
+        );
+    }
+
+    #[test]
+    fn test_check_game_status_alt_both_sides_have_no_moves_tie() {
+        let white = 0x0000_0000_FFFF_FFFFu64; // exactly 32 bits set
+        let black = 0xFFFF_FFFF_0000_0000u64; // exactly 32 bits set
+
+        let is_white_move = true; // or false, same result if no moves remain.
+
+        let status = check_game_status_alt(white, black, is_white_move);
+        assert_eq!(
+            status,
+            u64::MAX - 3,
+            "Expected tie => (u64::MAX - 3). Got something else."
+        );
+    }
+
+    #[test]
+    fn test_check_game_status_alt_black_has_moves() {
+        let white = (1 << 27) | (1 << 36); // (3,3) and (4,4)
+        let black = (1 << 28) | (1 << 35); // (3,4) and (4,3)
+        let is_white_move = false;         // black to move
+
+        let expected_moves = (1 << 19) | (1 << 26) | (1 << 37) | (1 << 44);
+
+        let status = check_game_status_alt(white, black, is_white_move);
+        assert_eq!(
+            status,
+            expected_moves,
+            "Expected black's moves in the standard opening, got something else."
+        );
     }
 }
