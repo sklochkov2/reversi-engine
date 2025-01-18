@@ -335,10 +335,23 @@ fn search_moves_opt(
     let mut best_orig_eval: i32 = 0;
     let mut local_alpha = alpha;
     let mut local_beta = beta;
-    let mut tmp = outcome;
-    while tmp > 0 {
-        let candidate = lowest_set_bit(tmp);
-        tmp &= !candidate;
+    const CORNER_MASK: u64 = 0x8100000000000081;
+    const EDGE_MASK: u64 = 0x42C300000000C342;
+    let mut corner_moves = outcome & CORNER_MASK;
+    let mut edge_moves = outcome & EDGE_MASK;
+    let mut other_moves = outcome & (! (CORNER_MASK|EDGE_MASK));
+    while corner_moves > 0 || edge_moves > 0 || other_moves > 0 {
+        let candidate: u64;
+        if corner_moves > 0 {
+            candidate = lowest_set_bit(corner_moves);
+            corner_moves &= !candidate;
+        } else if edge_moves > 0 {
+            candidate = lowest_set_bit(edge_moves);
+            edge_moves &= !candidate;
+        } else {
+            candidate = lowest_set_bit(other_moves);
+            other_moves &= !candidate;
+        }
         let next_white: u64;
         let next_black: u64;
         let new_pos_opt = apply_move(white, black, candidate, is_white_move);
