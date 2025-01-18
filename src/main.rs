@@ -1,8 +1,8 @@
 use chrono;
 use clap::Parser;
 use rayon::prelude::*;
-use std::path::Path;
 use reversi_tools::position::*;
+use std::path::Path;
 
 mod model;
 use model::*;
@@ -339,7 +339,7 @@ fn search_moves_opt(
     const EDGE_MASK: u64 = 0x42C300000000C342;
     let mut corner_moves = outcome & CORNER_MASK;
     let mut edge_moves = outcome & EDGE_MASK;
-    let mut other_moves = outcome & (! (CORNER_MASK|EDGE_MASK));
+    let mut other_moves = outcome & (!(CORNER_MASK | EDGE_MASK));
     while corner_moves > 0 || edge_moves > 0 || other_moves > 0 {
         let candidate: u64;
         if corner_moves > 0 {
@@ -513,8 +513,7 @@ fn generate_opening_book(
                 chrono::offset::Local::now()
             );
             for next_move in next_moves {
-                let new_pos_opt =
-                    apply_move(pos.white, pos.black, next_move, pos.white_to_move);
+                let new_pos_opt = apply_move(pos.white, pos.black, next_move, pos.white_to_move);
                 match new_pos_opt {
                     Ok((w, b)) => {
                         next_queue.push(Position {
@@ -621,7 +620,8 @@ fn local_game(args: Args) {
                 black,
                 white
             );
-            let (new_white, new_black) = apply_move_verbose(white, black, nxt_move, white_to_move).unwrap();
+            let (new_white, new_black) =
+                apply_move_verbose(white, black, nxt_move, white_to_move).unwrap();
             //println!("WWW {} {} {}", new_white, new_black, white_to_move);
             let game_status = check_game_status(new_white, new_black, !white_to_move);
             if game_status == u64::MAX || game_status < (u64::MAX - 3) {
