@@ -172,45 +172,38 @@ pub fn find_legal_moves_alt(white: u64, black: u64, is_white_to_move: bool) -> V
     result
 }
 
-/*
-fn eval_position(white: u64, black: u64) -> i32 {
-    const CORNER_MASK: u64 = 0x8100000000000081;
-    const EDGE_MASK: u64 = 0x42C300000000C342;
-
-    let white_score = (white & CORNER_MASK).count_ones() as i32 * 10
-        + (white & EDGE_MASK).count_ones() as i32 * 5
-        + white.count_ones() as i32;
-
-    let black_score = (black & CORNER_MASK).count_ones() as i32 * 10
-        + (black & EDGE_MASK).count_ones() as i32 * 5
-        + black.count_ones() as i32;
-
-    black_score - white_score
-}
-*/
-
 #[derive(Clone, Copy)]
 struct EvalCfg {
     corner_value: i32,
     edge_value: i32,
+    antiedge_value: i32,
+    anticorner_value: i32,
 }
 
 static DEFAULT_CFG: EvalCfg = EvalCfg {
     corner_value: 70,
     edge_value: 17,
+    antiedge_value: -22,
+    anticorner_value: -34,
 };
 
 fn eval_position_with_cfg(white: u64, black: u64, eval_cfg: EvalCfg) -> i32 {
     const CORNER_MASK: u64 = 0x8100000000000081;
     const EDGE_MASK: u64 = 0x42C300000000C342;
+    const ANTIEDGE_MASK: u64 = 4792111478498951490;
+    const ANTICORNER_MASK: u64 = 18577348462920192;
 
     let white_score = (white & CORNER_MASK).count_ones() as i32 * eval_cfg.corner_value
         + (white & EDGE_MASK).count_ones() as i32 * eval_cfg.edge_value
-        + white.count_ones() as i32;
+        + white.count_ones() as i32
+        + (white & ANTIEDGE_MASK).count_ones() as i32 * eval_cfg.antiedge_value
+        + (white & ANTICORNER_MASK).count_ones() as i32 * eval_cfg.anticorner_value;
 
     let black_score = (black & CORNER_MASK).count_ones() as i32 * eval_cfg.corner_value
         + (black & EDGE_MASK).count_ones() as i32 * eval_cfg.edge_value
-        + black.count_ones() as i32;
+        + black.count_ones() as i32
+        + (black & ANTIEDGE_MASK).count_ones() as i32 * eval_cfg.antiedge_value
+        + (black & ANTICORNER_MASK).count_ones() as i32 * eval_cfg.anticorner_value;
 
     black_score - white_score
 }
@@ -228,11 +221,14 @@ fn search_moves_par(
     // WARNING: NO PRUNING GOING ON!
     let outcome = check_game_status(white, black, is_white_move);
     if outcome == (u64::MAX - 2) {
-        return (u64::MAX, -1000);
+        return (u64::MAX, -10000);
     } else if outcome == (u64::MAX - 1) {
-        return (u64::MAX, 1000);
+        return (u64::MAX, 10000);
     } else if outcome == (u64::MAX - 3) {
         return (u64::MAX, 0);
+    }
+    if depth == 0 {
+        return (u64::MAX, eval_position_with_cfg(white, black, cfg));
     }
     let possible_moves: Vec<u64> = find_legal_moves_alt(white, black, is_white_move);
     if possible_moves.len() == 0 {
@@ -311,9 +307,9 @@ fn search_moves_par(
                         orig_depth,
                         cfg,
                     );
-                    if orig_eval > 500 {
+                    if orig_eval > 5000 {
                         orig_eval -= 1;
-                    } else if orig_eval < -500 {
+                    } else if orig_eval < -5000 {
                         orig_eval += 1;
                     }
                     let eval = if is_white_move { -orig_eval } else { orig_eval };
@@ -348,13 +344,12 @@ fn search_moves_opt(
 ) -> (u64, i32) {
     let outcome = check_game_status(white, black, is_white_move);
     if outcome == (u64::MAX - 2) {
-        return (u64::MAX, -1000);
+        return (u64::MAX, -10000);
     } else if outcome == (u64::MAX - 1) {
-        return (u64::MAX, 1000);
+        return (u64::MAX, 10000);
     } else if outcome == (u64::MAX - 3) {
         return (u64::MAX, 0);
     } else if outcome == u64::MAX {
-        //return (u64::MAX, eval_position(white, black));
         return search_moves_opt(
             white,
             black,
@@ -366,16 +361,18 @@ fn search_moves_opt(
             cfg,
         );
     } else if outcome == (u64::MAX - 3) {
-        //return (u64::MAX, eval_position(white, black));
         let white_cnt = white.count_ones();
         let black_cnt = black.count_ones();
         if white_cnt > black_cnt {
-            return (u64::MAX, -1000);
+            return (u64::MAX, -10000);
         } else if black_cnt > white_cnt {
-            return (u64::MAX, 1000);
+            return (u64::MAX, 10000);
         } else {
             return (u64::MAX, 0);
         }
+    }
+    if depth == 0 {
+        return (u64::MAX, eval_position_with_cfg(white, black, cfg));
     }
     let mut best_move: u64 = 0;
     let mut best_eval: i32 = i32::MIN;
@@ -384,10 +381,13 @@ fn search_moves_opt(
     let mut local_beta = beta;
     const CORNER_MASK: u64 = 0x8100000000000081;
     const EDGE_MASK: u64 = 0x42C300000000C342;
+    const ANTIEDGE_MASK: u64 = 4792111478498951490;
+    const ANTICORNER_MASK: u64 = 18577348462920192;
     let mut corner_moves = outcome & CORNER_MASK;
-    let mut edge_moves = outcome & EDGE_MASK;
-    let mut other_moves = outcome & (!(CORNER_MASK | EDGE_MASK));
-    while corner_moves > 0 || edge_moves > 0 || other_moves > 0 {
+    let mut edge_moves = outcome & EDGE_MASK & (!ANTIEDGE_MASK);
+    let mut other_moves = outcome & (!(CORNER_MASK | EDGE_MASK | ANTIEDGE_MASK | ANTICORNER_MASK));
+    let mut shit_moves = outcome & (ANTIEDGE_MASK | ANTICORNER_MASK);
+    while corner_moves > 0 || edge_moves > 0 || other_moves > 0 || shit_moves > 0 {
         let candidate: u64;
         if corner_moves > 0 {
             candidate = lowest_set_bit(corner_moves);
@@ -395,9 +395,12 @@ fn search_moves_opt(
         } else if edge_moves > 0 {
             candidate = lowest_set_bit(edge_moves);
             edge_moves &= !candidate;
-        } else {
+        } else if other_moves > 0 {
             candidate = lowest_set_bit(other_moves);
             other_moves &= !candidate;
+        } else {
+            candidate = lowest_set_bit(shit_moves);
+            shit_moves &= !candidate;
         }
         let next_white: u64;
         let next_black: u64;
@@ -431,10 +434,9 @@ fn search_moves_opt(
                 continue;
             }
         }
-        // Prioritizing shorter win paths
-        if orig_eval > 500 {
+        if orig_eval > 5000 {
             orig_eval -= 1;
-        } else if orig_eval < -500 {
+        } else if orig_eval < -5000 {
             orig_eval += 1;
         }
         if is_white_move {
@@ -519,8 +521,8 @@ fn generate_opening_book(
                         pos.black,
                         pos.white_to_move,
                         calculation_depth,
-                        -2000,
-                        2000,
+                        -20000,
+                        20000,
                         calculation_depth,
                         DEFAULT_CFG,
                     );
@@ -624,13 +626,13 @@ fn play_game_from_position(first: EvalCfg, second: EvalCfg, depth: u32, pos: Pos
                 } else {
                     curr_cfg = first;
                 }
-                let (best_move, _) = search_moves_par(
+                let (best_move, _) = search_moves_opt(
                     white,
                     black,
                     white_to_move,
                     depth,
-                    -2000,
-                    2000,
+                    -20000,
+                    20000,
                     depth,
                     curr_cfg,
                 );
@@ -684,37 +686,16 @@ fn compare_configs(first: EvalCfg, second: EvalCfg, depth: u32) -> i32 {
         }
         queue = next_queue;
     }
-    let mut first_score: i32 = 0;
-    let mut second_score: i32 = 0;
-    for pos in queue {
-        match play_game_from_position(first, second, depth, pos) {
-            1 => {
-                first_score += 2;
-            }
-            0 => {
-                first_score += 1;
-                second_score += 1;
-            }
-            -1 => {
-                second_score += 2;
-            }
-            _ => {}
-        }
-        match play_game_from_position(second, first, depth, pos) {
-            1 => {
-                second_score += 2;
-            }
-            0 => {
-                first_score += 1;
-                second_score += 1;
-            }
-            -1 => {
-                first_score += 2;
-            }
-            _ => {}
-        }
-    }
-    first_score - second_score
+    println!("Comparing engines over {} positions", queue.len());
+    let outcome = queue
+        .into_par_iter()
+        .map(|pos| {
+            let mut res: i32 = 2 * play_game_from_position(first, second, depth, pos);
+            res -= 2 * play_game_from_position(second, first, depth, pos);
+            res
+        })
+        .reduce(|| 0, |curr, x| curr + x);
+    outcome
 }
 
 fn local_game(args: Args) {
@@ -769,8 +750,8 @@ fn local_game(args: Args) {
                         black,
                         white_to_move,
                         depth,
-                        -2000,
-                        2000,
+                        -20000,
+                        20000,
                         depth,
                         DEFAULT_CFG,
                     );
@@ -786,8 +767,8 @@ fn local_game(args: Args) {
                 black,
                 white_to_move,
                 depth,
-                -2000,
-                2000,
+                -20000,
+                20000,
                 depth,
                 DEFAULT_CFG,
             );
@@ -1065,8 +1046,8 @@ fn play_multiplayer(args: Args) {
                             black,
                             white_to_move,
                             depth,
-                            -2000,
-                            2000,
+                            -20000,
+                            20000,
                             depth,
                             DEFAULT_CFG,
                         );
@@ -1173,11 +1154,15 @@ fn main() {
     } else if args.compare_configs {
         let first: EvalCfg = EvalCfg {
             corner_value: 70,
-            edge_value: 18,
+            edge_value: 17,
+            antiedge_value: -22,
+            anticorner_value: -34,
         };
         let second: EvalCfg = EvalCfg {
             corner_value: 70,
             edge_value: 17,
+            antiedge_value: -20,
+            anticorner_value: -30,
         };
         println!(
             "The score between first and second configs is {}",
