@@ -35,6 +35,10 @@ struct Args {
     #[arg(short, long, default_value_t = false)]
     generate_book: bool,
 
+    /// Compare two eval settings
+    #[arg(short, long, default_value_t = false)]
+    compare_configs: bool,
+
     /// When generating an opening book, how deeply to evaluate all moves
     #[arg(short, long, default_value_t = 5)]
     full_depth: u32,
@@ -168,6 +172,7 @@ pub fn find_legal_moves_alt(white: u64, black: u64, is_white_to_move: bool) -> V
     result
 }
 
+/*
 fn eval_position(white: u64, black: u64) -> i32 {
     const CORNER_MASK: u64 = 0x8100000000000081;
     const EDGE_MASK: u64 = 0x42C300000000C342;
@@ -182,6 +187,33 @@ fn eval_position(white: u64, black: u64) -> i32 {
 
     black_score - white_score
 }
+*/
+
+#[derive(Clone, Copy)]
+struct EvalCfg {
+    corner_value: i32,
+    edge_value: i32,
+}
+
+static DEFAULT_CFG: EvalCfg = EvalCfg {
+    corner_value: 70,
+    edge_value: 17,
+};
+
+fn eval_position_with_cfg(white: u64, black: u64, eval_cfg: EvalCfg) -> i32 {
+    const CORNER_MASK: u64 = 0x8100000000000081;
+    const EDGE_MASK: u64 = 0x42C300000000C342;
+
+    let white_score = (white & CORNER_MASK).count_ones() as i32 * eval_cfg.corner_value
+        + (white & EDGE_MASK).count_ones() as i32 * eval_cfg.edge_value
+        + white.count_ones() as i32;
+
+    let black_score = (black & CORNER_MASK).count_ones() as i32 * eval_cfg.corner_value
+        + (black & EDGE_MASK).count_ones() as i32 * eval_cfg.edge_value
+        + black.count_ones() as i32;
+
+    black_score - white_score
+}
 
 fn search_moves_par(
     white: u64,
@@ -191,6 +223,7 @@ fn search_moves_par(
     alpha: i32,
     beta: i32,
     orig_depth: u32,
+    cfg: EvalCfg,
 ) -> (u64, i32) {
     // WARNING: NO PRUNING GOING ON!
     let outcome = check_game_status(white, black, is_white_move);
@@ -205,7 +238,7 @@ fn search_moves_par(
     if possible_moves.len() == 0 {
         if outcome == u64::MAX {
             if depth == orig_depth {
-                return (u64::MAX, eval_position(white, black));
+                return (u64::MAX, eval_position_with_cfg(white, black, cfg));
             }
             if depth > 0 {
                 return search_moves_opt(
@@ -216,6 +249,7 @@ fn search_moves_par(
                     alpha,
                     beta,
                     orig_depth,
+                    cfg,
                 );
             } else {
                 return search_moves_opt(
@@ -226,6 +260,7 @@ fn search_moves_par(
                     alpha,
                     beta,
                     orig_depth,
+                    cfg,
                 );
             }
         }
@@ -247,7 +282,7 @@ fn search_moves_par(
                 }
             }
             if depth == 0 {
-                let orig_eval = eval_position(next_white, next_black);
+                let orig_eval = eval_position_with_cfg(next_white, next_black, cfg);
 
                 let eval = if is_white_move { -orig_eval } else { orig_eval };
                 (candidate, eval, orig_eval)
@@ -261,6 +296,7 @@ fn search_moves_par(
                         alpha,
                         beta,
                         orig_depth,
+                        cfg,
                     );
                     let eval = if is_white_move { -orig_eval } else { orig_eval };
                     (candidate, eval, orig_eval)
@@ -273,6 +309,7 @@ fn search_moves_par(
                         alpha,
                         beta,
                         orig_depth,
+                        cfg,
                     );
                     if orig_eval > 500 {
                         orig_eval -= 1;
@@ -307,6 +344,7 @@ fn search_moves_opt(
     alpha: i32,
     beta: i32,
     orig_depth: u32,
+    cfg: EvalCfg,
 ) -> (u64, i32) {
     let outcome = check_game_status(white, black, is_white_move);
     if outcome == (u64::MAX - 2) {
@@ -317,7 +355,16 @@ fn search_moves_opt(
         return (u64::MAX, 0);
     } else if outcome == u64::MAX {
         //return (u64::MAX, eval_position(white, black));
-        return search_moves_opt(white, black, !is_white_move, depth, alpha, beta, orig_depth);
+        return search_moves_opt(
+            white,
+            black,
+            !is_white_move,
+            depth,
+            alpha,
+            beta,
+            orig_depth,
+            cfg,
+        );
     } else if outcome == (u64::MAX - 3) {
         //return (u64::MAX, eval_position(white, black));
         let white_cnt = white.count_ones();
@@ -367,7 +414,7 @@ fn search_moves_opt(
         let eval: i32;
         let mut orig_eval: i32;
         if depth == 0 {
-            orig_eval = eval_position(next_white, next_black);
+            orig_eval = eval_position_with_cfg(next_white, next_black, cfg);
         } else {
             let new_move: u64;
             (new_move, orig_eval) = search_moves_opt(
@@ -378,6 +425,7 @@ fn search_moves_opt(
                 local_alpha,
                 local_beta,
                 orig_depth,
+                cfg,
             );
             if new_move == 0 {
                 continue;
@@ -474,6 +522,7 @@ fn generate_opening_book(
                         -2000,
                         2000,
                         calculation_depth,
+                        DEFAULT_CFG,
                     );
                     println!(
                         "{:?} Best move found: {}",
@@ -547,6 +596,127 @@ fn generate_opening_book(
     }
 }
 
+fn play_game_from_position(first: EvalCfg, second: EvalCfg, depth: u32, pos: Position) -> i32 {
+    let mut white = pos.white;
+    let mut black = pos.black;
+    let mut white_to_move = pos.white_to_move;
+    const BLACK_WON: u64 = u64::MAX - 1;
+    const WHITE_WON: u64 = u64::MAX - 2;
+    const DRAWN_GAME: u64 = u64::MAX - 3;
+    loop {
+        match check_game_status(white, black, white_to_move) {
+            u64::MAX => {
+                white_to_move = !white_to_move;
+            }
+            BLACK_WON => {
+                return 1;
+            }
+            WHITE_WON => {
+                return -1;
+            }
+            DRAWN_GAME => {
+                return 0;
+            }
+            _ => {
+                let curr_cfg;
+                if white_to_move {
+                    curr_cfg = second;
+                } else {
+                    curr_cfg = first;
+                }
+                let (best_move, _) = search_moves_par(
+                    white,
+                    black,
+                    white_to_move,
+                    depth,
+                    -2000,
+                    2000,
+                    depth,
+                    curr_cfg,
+                );
+                match apply_move(white, black, best_move, white_to_move) {
+                    Ok((w, b)) => {
+                        white = w;
+                        black = b;
+                        white_to_move = !white_to_move;
+                    }
+                    Err(_) => {
+                        return 0;
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn compare_configs(first: EvalCfg, second: EvalCfg, depth: u32) -> i32 {
+    // Generate all positions with a depth of 6 plies
+    let black = 0x0000000810000000u64;
+    let white = 0x0000001008000000u64;
+    let white_to_move: bool = false;
+    let starting_pos: Position = Position {
+        black: black,
+        white: white,
+        white_to_move: white_to_move,
+    };
+    let mut queue: Vec<Position> = Vec::new();
+    queue.push(starting_pos);
+    for _ in 0..6 {
+        let mut next_queue: Vec<Position> = Vec::new();
+        for pos in queue {
+            let next_moves = find_legal_moves_alt(pos.white, pos.black, pos.white_to_move);
+            for next_move in next_moves {
+                let new_pos_opt = apply_move(pos.white, pos.black, next_move, pos.white_to_move);
+                match new_pos_opt {
+                    Ok((w, b)) => {
+                        next_queue.push(Position {
+                            black: b,
+                            white: w,
+                            white_to_move: !pos.white_to_move,
+                        });
+                    }
+                    Err(_) => {
+                        //println!("Move error: {}", s);
+                        continue;
+                    }
+                }
+            }
+        }
+        queue = next_queue;
+    }
+    let mut first_score: i32 = 0;
+    let mut second_score: i32 = 0;
+    for pos in queue {
+        match play_game_from_position(first, second, depth, pos) {
+            1 => {
+                first_score += 2;
+            }
+            0 => {
+                first_score += 1;
+                second_score += 1;
+            }
+            -1 => {
+                second_score += 2;
+            }
+            _ => {}
+        }
+        match play_game_from_position(second, first, depth, pos) {
+            1 => {
+                second_score += 2;
+            }
+            0 => {
+                first_score += 1;
+                second_score += 1;
+            }
+            -1 => {
+                first_score += 2;
+            }
+            _ => {}
+        }
+    }
+    first_score - second_score
+}
+
 fn local_game(args: Args) {
     let mut black = 0x0000000810000000u64;
     let mut white = 0x0000001008000000u64;
@@ -594,8 +764,16 @@ fn local_game(args: Args) {
                     eval = 0;
                 }
                 None => {
-                    (nxt_move, eval) =
-                        search_moves_par(white, black, white_to_move, depth, -2000, 2000, depth);
+                    (nxt_move, eval) = search_moves_par(
+                        white,
+                        black,
+                        white_to_move,
+                        depth,
+                        -2000,
+                        2000,
+                        depth,
+                        DEFAULT_CFG,
+                    );
                     if nxt_move == 0 {
                         println!("NO MOVES!");
                         break;
@@ -603,8 +781,16 @@ fn local_game(args: Args) {
                 }
             }
         } else {
-            (nxt_move, eval) =
-                search_moves_par(white, black, white_to_move, depth, -2000, 2000, depth);
+            (nxt_move, eval) = search_moves_par(
+                white,
+                black,
+                white_to_move,
+                depth,
+                -2000,
+                2000,
+                depth,
+                DEFAULT_CFG,
+            );
             if nxt_move == 0 {
                 println!("NO MOVES!");
                 break;
@@ -882,6 +1068,7 @@ fn play_multiplayer(args: Args) {
                             -2000,
                             2000,
                             depth,
+                            DEFAULT_CFG,
                         );
                         if nxt_move == 0 {
                             println!("NO MOVES!");
@@ -983,6 +1170,19 @@ fn main() {
         } else {
             println!("No opening book save path provided!");
         }
+    } else if args.compare_configs {
+        let first: EvalCfg = EvalCfg {
+            corner_value: 70,
+            edge_value: 18,
+        };
+        let second: EvalCfg = EvalCfg {
+            corner_value: 70,
+            edge_value: 17,
+        };
+        println!(
+            "The score between first and second configs is {}",
+            compare_configs(first, second, args.search_depth)
+        );
     } else if args.api_url == "".to_string() {
         local_game(args);
     } else {
