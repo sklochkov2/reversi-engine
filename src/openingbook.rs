@@ -85,7 +85,7 @@ fn rotate90(b: u64) -> u64 {
     rotated
 }
 
-fn rotate_position_90(pos: &Position) -> Position {
+pub fn rotate_position_90(pos: &Position) -> Position {
     Position {
         black: rotate90(pos.black),
         white: rotate90(pos.white),
@@ -97,7 +97,7 @@ fn rotate_move_90(m: MoveMask) -> MoveMask {
     rotate90(m)
 }
 
-fn flip_position_vertical(pos: &Position) -> Position {
+pub fn flip_position_vertical(pos: &Position) -> Position {
     Position {
         black: flip_vertical(pos.black),
         white: flip_vertical(pos.white),
@@ -105,7 +105,7 @@ fn flip_position_vertical(pos: &Position) -> Position {
     }
 }
 
-fn flip_position_horizontal(pos: &Position) -> Position {
+pub fn flip_position_horizontal(pos: &Position) -> Position {
     Position {
         black: flip_horizontal(pos.black),
         white: flip_horizontal(pos.white),

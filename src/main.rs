@@ -3,6 +3,7 @@ use clap::Parser;
 use rayon::prelude::*;
 use reversi_tools::position::*;
 use std::path::Path;
+use std::collections::HashMap;
 
 mod model;
 use model::*;
@@ -662,20 +663,32 @@ fn compare_configs(first: EvalCfg, second: EvalCfg, depth: u32) -> i32 {
         white_to_move: white_to_move,
     };
     let mut queue: Vec<Position> = Vec::new();
+    let mut dedup_cache: HashMap<Position, bool> = HashMap::new();
     queue.push(starting_pos);
     for _ in 0..6 {
         let mut next_queue: Vec<Position> = Vec::new();
         for pos in queue {
+            if dedup_cache.contains_key(&pos) {
+                continue;
+            }
             let next_moves = find_legal_moves_alt(pos.white, pos.black, pos.white_to_move);
             for next_move in next_moves {
                 let new_pos_opt = apply_move(pos.white, pos.black, next_move, pos.white_to_move);
                 match new_pos_opt {
                     Ok((w, b)) => {
-                        next_queue.push(Position {
+                        let new_pos: Position = Position {
                             black: b,
                             white: w,
                             white_to_move: !pos.white_to_move,
-                        });
+                        };
+                        let mut p = pos.clone();
+                        for _ in 0..4 {
+                            dedup_cache.insert(p, true);
+                            dedup_cache.insert(flip_position_vertical(&p), true);
+                            dedup_cache.insert(flip_position_horizontal(&p), true);
+                            p = rotate_position_90(&p);
+                        }
+                        next_queue.push(new_pos);
                     }
                     Err(_) => {
                         //println!("Move error: {}", s);
@@ -719,16 +732,16 @@ fn local_game(args: Args) {
     }
 
     print_board(white, black, 0, 0, false);
-    let default_depth: u32 = args.search_depth;
+    //let default_depth: u32 = args.search_depth;
     let mut ply = 0;
     loop {
-        let piece_count = (white | black).count_ones();
-        let depth: u32;
-        if (64 - piece_count) > default_depth {
+        //let piece_count = (white | black).count_ones();
+        //let depth: u32 = default_depth;
+        /*if (64 - piece_count) > default_depth {
             depth = default_depth;
         } else {
             depth = 64 - piece_count;
-        }
+        }*/
         ply += 1;
         let nxt_move: u64;
         let eval: i32;
@@ -749,10 +762,10 @@ fn local_game(args: Args) {
                         white,
                         black,
                         white_to_move,
-                        depth,
+                        args.search_depth,
                         -20000,
                         20000,
-                        depth,
+                        args.search_depth,
                         DEFAULT_CFG,
                     );
                     if nxt_move == 0 {
@@ -766,10 +779,10 @@ fn local_game(args: Args) {
                 white,
                 black,
                 white_to_move,
-                depth,
+                args.search_depth,
                 -20000,
                 20000,
-                depth,
+                args.search_depth,
                 DEFAULT_CFG,
             );
             if nxt_move == 0 {
