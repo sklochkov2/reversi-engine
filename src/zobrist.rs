@@ -85,6 +85,7 @@ pub fn update_zobrist_hash(pos: RichPosition, hash: u64) -> u64 {
     while flipped != 0 {
         let tmp = lowest_set_bit(flipped);
         flipped &= !tmp;
+        new_hash ^= ZOBRIST_TABLE[table_pos(tmp)][1-color];
         new_hash ^= ZOBRIST_TABLE[table_pos(tmp)][color];
     }
     new_hash
