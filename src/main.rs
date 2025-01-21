@@ -243,7 +243,7 @@ fn search_moves_opt(
     } else if outcome == u64::MAX {
         let mut new_pos = pos;
         new_pos.white_to_move = !pos.white_to_move;
-        let (_, eval) = search_moves_opt(new_pos, depth, alpha, beta, orig_depth, cfg, update_zobrist_hash(new_pos, hash), cache);
+        let (_, eval) = search_moves_opt(new_pos, depth, alpha, beta, orig_depth, cfg, hash, cache);
         return (u64::MAX, eval);
     }
     let (cached_eval, cached_move) = cache.probe(hash, alpha, beta);
