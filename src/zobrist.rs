@@ -17,7 +17,7 @@ impl Default for TTEntry {
             key: 0,
             flag: TTFlag::NotFound,
             value: 0,
-            best_move: 0
+            best_move: 0,
         }
     }
 }
@@ -80,12 +80,16 @@ pub fn update_zobrist_hash(pos: RichPosition, hash: u64) -> u64 {
         color = 1;
     }
     let mut new_hash: u64 = hash;
-    new_hash ^= ZOBRIST_TABLE[table_pos(pos.last_move)][color];
+    if pos.last_move > 0 {
+        new_hash ^= ZOBRIST_TABLE[table_pos(pos.last_move)][color];
+    } else {
+        return hash;
+    }
     let mut flipped = pos.flips;
     while flipped != 0 {
         let tmp = lowest_set_bit(flipped);
         flipped &= !tmp;
-        new_hash ^= ZOBRIST_TABLE[table_pos(tmp)][1-color];
+        new_hash ^= ZOBRIST_TABLE[table_pos(tmp)][1 - color];
         new_hash ^= ZOBRIST_TABLE[table_pos(tmp)][color];
     }
     new_hash
@@ -100,11 +104,11 @@ impl TranspositionTable {
     pub fn insert_position(&mut self, hash: u64, eval: i32, kind: TTFlag, mv: u64) {
         //let index = (hash % self.size as u64) as usize;
         let index = find_index(hash, self.size);
-        self.entries[index] = TTEntry{
+        self.entries[index] = TTEntry {
             key: hash,
             flag: kind,
             value: eval,
-            best_move: mv
+            best_move: mv,
         };
     }
 
@@ -117,12 +121,8 @@ impl TranspositionTable {
             return (-163840, 0);
         }
         match entry.flag {
-            TTFlag::NotFound => {
-                (-163840, 0)
-            }
-            TTFlag::Exact => {
-                (entry.value, entry.best_move)
-            }
+            TTFlag::NotFound => (-163840, 0),
+            TTFlag::Exact => (entry.value, entry.best_move),
             TTFlag::AlphaBound => {
                 if entry.value >= beta {
                     (entry.value, entry.best_move)

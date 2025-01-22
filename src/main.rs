@@ -165,7 +165,16 @@ fn search_moves_par(
         let mut new_pos = pos;
         new_pos.white_to_move = !pos.white_to_move;
         let mut cache = TranspositionTable::new(7);
-        let (_, eval) = search_moves_opt(new_pos, depth - 1, alpha, beta, orig_depth, cfg, compute_zobrist_hash(new_pos), &mut cache);
+        let (_, eval) = search_moves_opt(
+            new_pos,
+            depth - 1,
+            alpha,
+            beta,
+            orig_depth,
+            cfg,
+            compute_zobrist_hash(new_pos),
+            &mut cache,
+        );
         return (u64::MAX, eval);
     }
     if depth == 0 {
@@ -176,7 +185,16 @@ fn search_moves_par(
         let mut new_pos = pos;
         new_pos.white_to_move = !pos.white_to_move;
         let mut cache = TranspositionTable::new(7);
-        return search_moves_opt(new_pos, depth - 1, alpha, beta, orig_depth, cfg, compute_zobrist_hash(new_pos), &mut cache);
+        return search_moves_opt(
+            new_pos,
+            depth - 1,
+            alpha,
+            beta,
+            orig_depth,
+            cfg,
+            compute_zobrist_hash(new_pos),
+            &mut cache,
+        );
     }
     let (best_move, _best_eval, best_orig_eval) = possible_moves
         .into_par_iter()
@@ -184,8 +202,16 @@ fn search_moves_par(
             let new_pos: RichPosition = apply_move(pos, candidate).unwrap();
             if orig_depth - depth > 0 {
                 let mut cache = TranspositionTable::new(14);
-                let (_, orig_eval) =
-                    search_moves_opt(new_pos, depth - 1, alpha, beta, orig_depth, cfg, compute_zobrist_hash(new_pos), &mut cache);
+                let (_, orig_eval) = search_moves_opt(
+                    new_pos,
+                    depth - 1,
+                    alpha,
+                    beta,
+                    orig_depth,
+                    cfg,
+                    compute_zobrist_hash(new_pos),
+                    &mut cache,
+                );
                 let eval = if pos.white_to_move {
                     -orig_eval
                 } else {
@@ -285,8 +311,16 @@ fn search_moves_opt(
         let eval: i32;
         let mut orig_eval: i32;
         let new_move: u64;
-        (new_move, orig_eval) =
-            search_moves_opt(new_pos, depth - 1, local_alpha, local_beta, orig_depth, cfg, update_zobrist_hash(new_pos, hash), cache);
+        (new_move, orig_eval) = search_moves_opt(
+            new_pos,
+            depth - 1,
+            local_alpha,
+            local_beta,
+            orig_depth,
+            cfg,
+            update_zobrist_hash(new_pos, hash),
+            cache,
+        );
         if new_move == 0 {
             continue;
         }
@@ -473,8 +507,16 @@ fn play_game_from_position(first: EvalCfg, second: EvalCfg, depth: u32, pos: Ric
                     curr_cfg = first;
                 }
                 let mut cache = TranspositionTable::new(14);
-                let (best_move, _) =
-                    search_moves_opt(rich_pos, depth, -20000, 20000, depth, curr_cfg, compute_zobrist_hash(rich_pos), &mut cache);
+                let (best_move, _) = search_moves_opt(
+                    rich_pos,
+                    depth,
+                    -20000,
+                    20000,
+                    depth,
+                    curr_cfg,
+                    compute_zobrist_hash(rich_pos),
+                    &mut cache,
+                );
                 rich_pos = apply_move(rich_pos, best_move).unwrap();
             }
         }
