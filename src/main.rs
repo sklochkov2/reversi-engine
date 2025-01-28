@@ -2,8 +2,8 @@ use chrono;
 use clap::Parser;
 use rayon::prelude::*;
 use reversi_tools::position::*;
-use std::path::Path;
 use std::collections::HashMap;
+use std::path::Path;
 
 mod model;
 use model::*;
@@ -237,8 +237,9 @@ fn search_moves_par(
             if depth == orig_depth {
                 return (u64::MAX, eval_position_with_cfg(white, black, cfg));
             }
+            let eval: i32;
             if depth > 0 {
-                return search_moves_opt(
+                (_, eval) = search_moves_opt(
                     white,
                     black,
                     !is_white_move,
@@ -249,7 +250,7 @@ fn search_moves_par(
                     cfg,
                 );
             } else {
-                return search_moves_opt(
+                (_, eval) = search_moves_opt(
                     white,
                     black,
                     !is_white_move,
@@ -260,6 +261,7 @@ fn search_moves_par(
                     cfg,
                 );
             }
+            return (u64::MAX, eval);
         }
     }
     let (best_move, _best_eval, best_orig_eval) = possible_moves
@@ -351,7 +353,7 @@ fn search_moves_opt(
     } else if outcome == (u64::MAX - 3) {
         return (u64::MAX, 0);
     } else if outcome == u64::MAX {
-        return search_moves_opt(
+        let (_, eval) = search_moves_opt(
             white,
             black,
             !is_white_move,
@@ -361,6 +363,7 @@ fn search_moves_opt(
             orig_depth,
             cfg,
         );
+        return (u64::MAX, eval);
     } else if outcome == (u64::MAX - 3) {
         let white_cnt = white.count_ones();
         let black_cnt = black.count_ones();
@@ -375,7 +378,7 @@ fn search_moves_opt(
     if depth == 0 {
         return (u64::MAX, eval_position_with_cfg(white, black, cfg));
     }
-    let mut best_move: u64 = 0;
+    let mut best_move: u64 = u64::MAX;
     let mut best_eval: i32 = i32::MIN;
     let mut best_orig_eval: i32 = 0;
     let mut local_alpha = alpha;
