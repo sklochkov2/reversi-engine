@@ -18,6 +18,11 @@ const ANTICORNER_MASK: u64 = 18_577_348_462_920_192;
 // mate-distance scores that get shrunk by one each ply as they propagate up.
 const MATE_THRESHOLD: i32 = 5000;
 
+// Below this remaining depth the branching factor is small enough that the
+// `compute_moves`-per-candidate cost of mobility-based ordering exceeds the
+// pruning savings, so we fall back to the cheap bucket ordering.
+const MOBILITY_ORDER_MIN_DEPTH: u32 = 3;
+
 // Special return codes from `check_game_status`. Anything below `PASS_OUTCOME`
 // is an actual move bitmap.
 const DRAW_OUTCOME: u64 = u64::MAX - 3;
@@ -224,24 +229,62 @@ fn nega_search_impl<const COUNT: bool>(
 
     let mut best_move: u64 = u64::MAX;
     let mut best_v: i32 = i32::MIN;
+    // `searched_any` controls Principal Variation Search: the first move at
+    // a node gets a full-window search (full alpha-beta accuracy); every
+    // subsequent move is speculatively searched with a null window, and
+    // only re-searched with the full window if it fails high. This is
+    // strictly cheaper when move ordering is good (which, with the TT-move
+    // seed and the coarse bucket ordering, it usually is).
+    let mut searched_any = false;
 
-    // Helper: search a single candidate, update best_v/best_move, and bail
-    // out on a beta cutoff (also storing the LOWER bound to the TT first).
-    macro_rules! try_move {
-        ($candidate:expr) => {{
+    macro_rules! try_move_cached {
+        ($candidate:expr, $new_us:expr, $new_them:expr) => {{
             let candidate = $candidate;
-            let (new_us, new_them) = apply_move_us_them(us, them, candidate);
-            let (_, child_v) = nega_search_impl::<COUNT>(
-                new_them,
-                new_us,
-                depth - 1,
-                -b,
-                -a,
-                orig_depth,
-                cfg,
-                counter,
-            );
+            let new_us_c = $new_us;
+            let new_them_c = $new_them;
+
+            let child_v = if !searched_any {
+                let (_, cv) = nega_search_impl::<COUNT>(
+                    new_them_c,
+                    new_us_c,
+                    depth - 1,
+                    -b,
+                    -a,
+                    orig_depth,
+                    cfg,
+                    counter,
+                );
+                cv
+            } else {
+                let (_, cv) = nega_search_impl::<COUNT>(
+                    new_them_c,
+                    new_us_c,
+                    depth - 1,
+                    -a - 1,
+                    -a,
+                    orig_depth,
+                    cfg,
+                    counter,
+                );
+                let tentative = adjust_mate_distance(-cv);
+                if tentative > a && tentative < b && a + 1 < b {
+                    let (_, cv2) = nega_search_impl::<COUNT>(
+                        new_them_c,
+                        new_us_c,
+                        depth - 1,
+                        -b,
+                        -a,
+                        orig_depth,
+                        cfg,
+                        counter,
+                    );
+                    cv2
+                } else {
+                    cv
+                }
+            };
             let v = adjust_mate_distance(-child_v);
+            searched_any = true;
             if v > best_v {
                 best_v = v;
                 best_move = candidate;
@@ -262,30 +305,95 @@ fn nega_search_impl<const COUNT: bool>(
         }};
     }
 
+    macro_rules! try_move {
+        ($candidate:expr) => {{
+            let candidate = $candidate;
+            let (new_us_c, new_them_c) = apply_move_us_them(us, them, candidate);
+            try_move_cached!(candidate, new_us_c, new_them_c);
+        }};
+    }
+
     // Try the TT move first (if legal) - best candidate for beta cutoff.
     if tt_move_bit != 0 {
         try_move!(tt_move_bit);
     }
 
-    let mut corner_moves = outcome & CORNER_MASK & !tt_move_bit;
-    let mut edge_moves = outcome & EDGE_MASK & !ANTIEDGE_MASK & !tt_move_bit;
-    let mut other_moves =
-        outcome & !(CORNER_MASK | EDGE_MASK | ANTIEDGE_MASK | ANTICORNER_MASK) & !tt_move_bit;
-    let mut bad_moves = outcome & (ANTIEDGE_MASK | ANTICORNER_MASK) & !tt_move_bit;
-
-    macro_rules! run_bucket {
-        ($moves:ident) => {
-            while $moves != 0 {
-                let candidate = pop_lsb(&mut $moves);
-                try_move!(candidate);
+    // For the remaining moves we have two ordering strategies:
+    //   (a) Deep nodes (depth >= 3): sort candidates by opponent mobility
+    //       after the move, with positional biases. Paying `compute_moves`
+    //       per candidate is cheaper than wasting an unordered subtree.
+    //   (b) Shallow nodes: the four-bucket static ordering (corners, good
+    //       edges, quiet squares, bad squares). The bucket split is just
+    //       four mask-AND operations and wins on raw throughput when the
+    //       subtree doesn't offer much to prune.
+    if depth >= MOBILITY_ORDER_MIN_DEPTH {
+        // Score / apply / cache each move on the stack.
+        #[derive(Copy, Clone)]
+        struct Scored {
+            priority: i32,
+            candidate: u64,
+            new_us: u64,
+            new_them: u64,
+        }
+        let mut scored: [Scored; 32] = [Scored {
+            priority: 0,
+            candidate: 0,
+            new_us: 0,
+            new_them: 0,
+        }; 32];
+        let mut n = 0usize;
+        let mut remaining = outcome & !tt_move_bit;
+        while remaining != 0 {
+            let candidate = pop_lsb(&mut remaining);
+            let (new_us_c, new_them_c) = apply_move_us_them(us, them, candidate);
+            let mob = compute_moves(new_them_c, new_us_c).count_ones() as i32;
+            // Positional biases keep the coarse corner/edge/X-square
+            // preferences of the old ordering without having to special-
+            // case them in the sort below.
+            let mut priority = mob;
+            if candidate & CORNER_MASK != 0 {
+                priority -= 1000;
+            } else if candidate & ANTICORNER_MASK != 0 {
+                priority += 200;
+            } else if candidate & ANTIEDGE_MASK != 0 {
+                priority += 80;
+            } else if candidate & EDGE_MASK != 0 {
+                priority -= 20;
             }
-        };
-    }
+            scored[n] = Scored {
+                priority,
+                candidate,
+                new_us: new_us_c,
+                new_them: new_them_c,
+            };
+            n += 1;
+        }
+        scored[..n].sort_unstable_by_key(|s| s.priority);
+        for i in 0..n {
+            let s = scored[i];
+            try_move_cached!(s.candidate, s.new_us, s.new_them);
+        }
+    } else {
+        let mut corner_moves = outcome & CORNER_MASK & !tt_move_bit;
+        let mut edge_moves = outcome & EDGE_MASK & !ANTIEDGE_MASK & !tt_move_bit;
+        let mut other_moves =
+            outcome & !(CORNER_MASK | EDGE_MASK | ANTIEDGE_MASK | ANTICORNER_MASK) & !tt_move_bit;
+        let mut bad_moves = outcome & (ANTIEDGE_MASK | ANTICORNER_MASK) & !tt_move_bit;
 
-    run_bucket!(corner_moves);
-    run_bucket!(edge_moves);
-    run_bucket!(other_moves);
-    run_bucket!(bad_moves);
+        macro_rules! run_bucket {
+            ($moves:ident) => {
+                while $moves != 0 {
+                    let candidate = pop_lsb(&mut $moves);
+                    try_move!(candidate);
+                }
+            };
+        }
+
+        run_bucket!(corner_moves);
+        run_bucket!(edge_moves);
+        run_bucket!(other_moves);
+        run_bucket!(bad_moves);
+    }
 
     // No beta cutoff. Classify and store.
     let bound = if best_v > alpha_used {
