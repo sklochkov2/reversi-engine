@@ -26,12 +26,16 @@ pub struct Args {
     /// Compare two eval settings
     #[arg(short, long, default_value_t = false)]
     pub compare_configs: bool,
-            
+
     /// When generating an opening book, how deeply to evaluate all moves
     #[arg(short, long, default_value_t = 5)]
     pub full_depth: u32,
-    
+
     #[arg(short, long, default_value_t = 7)]
     /// When generating an opening book, how deeply to analyze main lines
     pub k_partial_depth: u32,
+
+    /// Run a benchmark for performance evaluation and profiling purposes.
+    #[arg(short, long, default_value_t = false)]
+    pub benchmark: bool,
 }
