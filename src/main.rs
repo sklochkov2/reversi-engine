@@ -9,6 +9,8 @@ use std::time::SystemTime;
 mod openingbook;
 use openingbook::*;
 
+mod tt;
+
 mod engine;
 use engine::*;
 
@@ -155,14 +157,14 @@ fn generate_opening_book(
 }
 
 fn evaluate_position(depth: u32, pos: Position) -> u64 {
+    // Clear the TT so each position is measured from a cold state; this
+    // makes the benchmark a faithful per-position comparison.
+    tt::tt().clear();
     let mut counter: u64 = 0;
-    search_moves_opt_cntr(
+    search_iterative_cntr(
         pos.white,
         pos.black,
         pos.white_to_move,
-        depth,
-        -20000,
-        20000,
         depth,
         DEFAULT_CFG,
         &mut counter,
@@ -11917,13 +11919,10 @@ fn local_game(args: Args) {
                     eval = 0;
                 }
                 None => {
-                    (nxt_move, eval) = search_moves_par(
+                    (nxt_move, eval) = search_iterative(
                         white,
                         black,
                         white_to_move,
-                        args.search_depth,
-                        -20000,
-                        20000,
                         args.search_depth,
                         DEFAULT_CFG,
                     );
@@ -11934,13 +11933,10 @@ fn local_game(args: Args) {
                 }
             }
         } else {
-            (nxt_move, eval) = search_moves_par(
+            (nxt_move, eval) = search_iterative(
                 white,
                 black,
                 white_to_move,
-                args.search_depth,
-                -20000,
-                20000,
                 args.search_depth,
                 DEFAULT_CFG,
             );
@@ -12097,13 +12093,10 @@ fn play_multiplayer(args: Args) {
                         } else {
                             depth = 64 - piece_count;
                         }
-                        (nxt_move, eval) = search_moves_par(
+                        (nxt_move, eval) = search_iterative(
                             white,
                             black,
                             white_to_move,
-                            depth,
-                            -20000,
-                            20000,
                             depth,
                             DEFAULT_CFG,
                         );

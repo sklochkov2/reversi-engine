@@ -1,6 +1,10 @@
 use rayon::prelude::*;
 use reversi_tools::position::*;
 
+use crate::tt::{
+    hash_position, tt, TTData, BOUND_EXACT, BOUND_LOWER, BOUND_NONE, BOUND_UPPER, NO_MOVE_SQ,
+};
+
 // --------------------------------------------------------------------------
 // Constants shared across the engine
 // --------------------------------------------------------------------------
@@ -36,8 +40,8 @@ fn pop_lsb(bits: &mut u64) -> u64 {
 
 /// Mate-distance shrink: scores more extreme than ±MATE_THRESHOLD are pulled
 /// one step towards zero on every ply so the engine prefers quicker wins /
-/// slower losses. This is magnitude-preserving enough that it commutes with
-/// sign flips (used in the negamax recursion).
+/// slower losses. Magnitude-preserving enough that it commutes with sign
+/// flips (used in the negamax recursion).
 #[inline(always)]
 fn adjust_mate_distance(v: i32) -> i32 {
     if v > MATE_THRESHOLD {
@@ -91,8 +95,6 @@ pub static DEFAULT_CFG: EvalCfg = EvalCfg {
     anticorner_value: -34,
 };
 
-/// Raw one-sided evaluation: how much the given bitmap is worth according to
-/// the configuration.
 #[inline(always)]
 fn side_score(bb: u64, cfg: EvalCfg) -> i32 {
     (bb & CORNER_MASK).count_ones() as i32 * cfg.corner_value
@@ -102,140 +104,40 @@ fn side_score(bb: u64, cfg: EvalCfg) -> i32 {
         + (bb & ANTICORNER_MASK).count_ones() as i32 * cfg.anticorner_value
 }
 
-/// Public evaluation, in absolute (black-white) space. Preserved for callers.
 pub fn eval_position_with_cfg(white: u64, black: u64, eval_cfg: EvalCfg) -> i32 {
     side_score(black, eval_cfg) - side_score(white, eval_cfg)
 }
 
-/// Evaluation from the point of view of the side to move ("us"). Positive
-/// means we are ahead.
 #[inline(always)]
 fn eval_us_them(us: u64, them: u64, cfg: EvalCfg) -> i32 {
     side_score(us, cfg) - side_score(them, cfg)
 }
 
 // --------------------------------------------------------------------------
-// Core negamax search (operates on us/them bitmaps)
+// Core negamax search with transposition table
 // --------------------------------------------------------------------------
 //
-// All scores returned here are in the side-to-move's frame: +10000 means "we
-// (the side currently to move) just won", -10000 means "we just lost". This
-// removes the per-node `is_white_move` branch that the previous minimax
-// implementation had to carry around.
+// All scores are in the side-to-move's frame (+10000 = we just won). The
+// colour flag never appears inside the hot path; the public API wrappers
+// convert between absolute (black - white) and us-perspective scores at
+// the call boundary.
 //
-// The helper functions from `reversi_tools` (`apply_move_unchecked`,
-// `check_game_status`) are still parameterised over a colour flag; calling
-// them with a constant `true` lets the compiler specialise away the
-// redundant branches thanks to `#[inline(always)]` on those helpers.
+// The `COUNT` const generic selects whether the search increments a node
+// counter - used by the benchmark harness. The compiler monomorphises
+// the function into two copies so the counter path imposes no overhead
+// on the production search.
 
 #[inline(always)]
 fn apply_move_us_them(us: u64, them: u64, move_bit: u64) -> (u64, u64) {
-    // Passing `true` keeps the first argument as "me" and returns
-    // (new_me, new_opp) without re-swapping.
     apply_move_unchecked(us, them, move_bit, true)
 }
 
 #[inline(always)]
 fn game_status_us_them(us: u64, them: u64) -> u64 {
-    // With is_white_move=true the helper treats the first argument as the
-    // side to move. The terminal codes it returns depend on piece counts
-    // (white vs black in the helper's nomenclature), so:
-    //   WHITE_WON_OUTCOME  -> us won
-    //   BLACK_WON_OUTCOME  -> them won
-    //   DRAW_OUTCOME       -> draw
-    //   PASS_OUTCOME       -> us must pass
-    //   otherwise          -> bitmap of our legal moves
     check_game_status(us, them, true)
 }
 
-fn nega_search(
-    us: u64,
-    them: u64,
-    depth: u32,
-    alpha: i32,
-    beta: i32,
-    orig_depth: u32,
-    cfg: EvalCfg,
-) -> (u64, i32) {
-    let outcome = game_status_us_them(us, them);
-
-    // Terminal / pass handling (uncommon; kept branch-heavy only here).
-    if outcome >= DRAW_OUTCOME {
-        if outcome == WHITE_WON_OUTCOME {
-            return (u64::MAX, 10_000); // "us" won
-        }
-        if outcome == BLACK_WON_OUTCOME {
-            return (u64::MAX, -10_000); // "them" won
-        }
-        if outcome == DRAW_OUTCOME {
-            return (u64::MAX, 0);
-        }
-        // Pass: swap sides without consuming depth, then negate child's score
-        // to transform it back into our frame.
-        let (_, child) = nega_search(them, us, depth, -beta, -alpha, orig_depth, cfg);
-        return (u64::MAX, -child);
-    }
-
-    if depth == 0 {
-        return (u64::MAX, eval_us_them(us, them, cfg));
-    }
-
-    // Move ordering: corners first, then edges (but not squares that also
-    // belong to the "antiedge" danger squares), then quiet moves, then bad
-    // squares. Identical to the previous implementation.
-    let mut corner_moves = outcome & CORNER_MASK;
-    let mut edge_moves = outcome & EDGE_MASK & !ANTIEDGE_MASK;
-    let mut other_moves = outcome & !(CORNER_MASK | EDGE_MASK | ANTIEDGE_MASK | ANTICORNER_MASK);
-    let mut bad_moves = outcome & (ANTIEDGE_MASK | ANTICORNER_MASK);
-
-    let mut best_move: u64 = u64::MAX;
-    let mut best_v: i32 = i32::MIN;
-    let mut a = alpha;
-
-    macro_rules! run_bucket {
-        ($moves:ident) => {
-            while $moves != 0 {
-                let candidate = pop_lsb(&mut $moves);
-
-                let (new_us, new_them) = apply_move_us_them(us, them, candidate);
-
-                // Child returns score in the *child's* frame; flip to ours.
-                let (_, child_v) = nega_search(
-                    new_them,
-                    new_us,
-                    depth - 1,
-                    -beta,
-                    -a,
-                    orig_depth,
-                    cfg,
-                );
-                let v = adjust_mate_distance(-child_v);
-
-                if v > best_v {
-                    best_v = v;
-                    best_move = candidate;
-
-                    if v > a {
-                        a = v;
-                    }
-                    if a >= beta {
-                        // Fail-soft beta cutoff: propagate the actual score.
-                        return (candidate, v);
-                    }
-                }
-            }
-        };
-    }
-
-    run_bucket!(corner_moves);
-    run_bucket!(edge_moves);
-    run_bucket!(other_moves);
-    run_bucket!(bad_moves);
-
-    (best_move, best_v)
-}
-
-fn nega_search_cntr(
+fn nega_search_impl<const COUNT: bool>(
     us: u64,
     them: u64,
     depth: u32,
@@ -245,7 +147,9 @@ fn nega_search_cntr(
     cfg: EvalCfg,
     counter: &mut u64,
 ) -> (u64, i32) {
-    *counter += 1;
+    if COUNT {
+        *counter += 1;
+    }
 
     let outcome = game_status_us_them(us, them);
 
@@ -259,8 +163,11 @@ fn nega_search_cntr(
         if outcome == DRAW_OUTCOME {
             return (u64::MAX, 0);
         }
-        let (_, child) =
-            nega_search_cntr(them, us, depth, -beta, -alpha, orig_depth, cfg, counter);
+        // Pass: swap sides without consuming depth, then negate child's
+        // score back into our frame.
+        let (_, child) = nega_search_impl::<COUNT>(
+            them, us, depth, -beta, -alpha, orig_depth, cfg, counter,
+        );
         return (u64::MAX, -child);
     }
 
@@ -268,45 +175,109 @@ fn nega_search_cntr(
         return (u64::MAX, eval_us_them(us, them, cfg));
     }
 
-    let mut corner_moves = outcome & CORNER_MASK;
-    let mut edge_moves = outcome & EDGE_MASK & !ANTIEDGE_MASK;
-    let mut other_moves = outcome & !(CORNER_MASK | EDGE_MASK | ANTIEDGE_MASK | ANTICORNER_MASK);
-    let mut bad_moves = outcome & (ANTIEDGE_MASK | ANTICORNER_MASK);
+    // ---- TT probe -------------------------------------------------------
+    let key = hash_position(us, them);
+    let mut tt_move_bit: u64 = 0;
+    let mut a = alpha;
+    let mut b = beta;
+
+    if let Some(entry) = tt().probe(key) {
+        if entry.bound != BOUND_NONE && entry.depth as i32 >= depth as i32 {
+            let s = entry.score;
+            let stored_move = if entry.move_sq < NO_MOVE_SQ {
+                1u64 << entry.move_sq
+            } else {
+                u64::MAX
+            };
+            match entry.bound {
+                BOUND_EXACT => return (stored_move, s),
+                BOUND_LOWER => {
+                    if s >= b {
+                        return (stored_move, s);
+                    }
+                    if s > a {
+                        a = s;
+                    }
+                }
+                BOUND_UPPER => {
+                    if s <= a {
+                        return (stored_move, s);
+                    }
+                    if s < b {
+                        b = s;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if entry.move_sq < NO_MOVE_SQ {
+            let candidate = 1u64 << entry.move_sq;
+            if outcome & candidate != 0 {
+                tt_move_bit = candidate;
+            }
+        }
+    }
+
+    // "alpha we searched with", captured before any mutation during the
+    // move loop - used for final bound classification.
+    let alpha_used = a;
 
     let mut best_move: u64 = u64::MAX;
     let mut best_v: i32 = i32::MIN;
-    let mut a = alpha;
+
+    // Helper: search a single candidate, update best_v/best_move, and bail
+    // out on a beta cutoff (also storing the LOWER bound to the TT first).
+    macro_rules! try_move {
+        ($candidate:expr) => {{
+            let candidate = $candidate;
+            let (new_us, new_them) = apply_move_us_them(us, them, candidate);
+            let (_, child_v) = nega_search_impl::<COUNT>(
+                new_them,
+                new_us,
+                depth - 1,
+                -b,
+                -a,
+                orig_depth,
+                cfg,
+                counter,
+            );
+            let v = adjust_mate_distance(-child_v);
+            if v > best_v {
+                best_v = v;
+                best_move = candidate;
+                if v > a {
+                    a = v;
+                }
+                if a >= b {
+                    tt().store(
+                        key,
+                        v,
+                        depth as i8,
+                        BOUND_LOWER,
+                        candidate.trailing_zeros() as u8,
+                    );
+                    return (candidate, v);
+                }
+            }
+        }};
+    }
+
+    // Try the TT move first (if legal) - best candidate for beta cutoff.
+    if tt_move_bit != 0 {
+        try_move!(tt_move_bit);
+    }
+
+    let mut corner_moves = outcome & CORNER_MASK & !tt_move_bit;
+    let mut edge_moves = outcome & EDGE_MASK & !ANTIEDGE_MASK & !tt_move_bit;
+    let mut other_moves =
+        outcome & !(CORNER_MASK | EDGE_MASK | ANTIEDGE_MASK | ANTICORNER_MASK) & !tt_move_bit;
+    let mut bad_moves = outcome & (ANTIEDGE_MASK | ANTICORNER_MASK) & !tt_move_bit;
 
     macro_rules! run_bucket {
         ($moves:ident) => {
             while $moves != 0 {
                 let candidate = pop_lsb(&mut $moves);
-
-                let (new_us, new_them) = apply_move_us_them(us, them, candidate);
-
-                let (_, child_v) = nega_search_cntr(
-                    new_them,
-                    new_us,
-                    depth - 1,
-                    -beta,
-                    -a,
-                    orig_depth,
-                    cfg,
-                    counter,
-                );
-                let v = adjust_mate_distance(-child_v);
-
-                if v > best_v {
-                    best_v = v;
-                    best_move = candidate;
-
-                    if v > a {
-                        a = v;
-                    }
-                    if a >= beta {
-                        return (candidate, v);
-                    }
-                }
+                try_move!(candidate);
             }
         };
     }
@@ -316,16 +287,51 @@ fn nega_search_cntr(
     run_bucket!(other_moves);
     run_bucket!(bad_moves);
 
+    // No beta cutoff. Classify and store.
+    let bound = if best_v > alpha_used {
+        BOUND_EXACT
+    } else {
+        BOUND_UPPER
+    };
+    let move_sq = if best_move != u64::MAX && best_move != 0 {
+        best_move.trailing_zeros() as u8
+    } else {
+        NO_MOVE_SQ
+    };
+    tt().store(key, best_v, depth as i8, bound, move_sq);
+
     (best_move, best_v)
+}
+
+fn nega_search(
+    us: u64,
+    them: u64,
+    depth: u32,
+    alpha: i32,
+    beta: i32,
+    orig_depth: u32,
+    cfg: EvalCfg,
+) -> (u64, i32) {
+    let mut dummy = 0u64;
+    nega_search_impl::<false>(us, them, depth, alpha, beta, orig_depth, cfg, &mut dummy)
+}
+
+fn nega_search_cntr(
+    us: u64,
+    them: u64,
+    depth: u32,
+    alpha: i32,
+    beta: i32,
+    orig_depth: u32,
+    cfg: EvalCfg,
+    counter: &mut u64,
+) -> (u64, i32) {
+    nega_search_impl::<true>(us, them, depth, alpha, beta, orig_depth, cfg, counter)
 }
 
 // --------------------------------------------------------------------------
 // Public white/black wrappers (preserve external API semantics)
 // --------------------------------------------------------------------------
-//
-// External callers talk in (white, black, is_white_move) and expect scores in
-// absolute "black minus white" space. These helpers convert the frame once at
-// the boundary; the hot inner search never has to look at the colour flag.
 
 #[inline(always)]
 fn to_us_them(white: u64, black: u64, is_white_move: bool) -> (u64, u64) {
@@ -336,13 +342,9 @@ fn to_us_them(white: u64, black: u64, is_white_move: bool) -> (u64, u64) {
     }
 }
 
-/// Map alpha/beta from absolute (black-white) space into the us-perspective
-/// used by the negamax search, and return a callback to unwrap the resulting
-/// score back to absolute space.
 #[inline(always)]
 fn us_frame_bounds(alpha: i32, beta: i32, is_white_move: bool) -> (i32, i32) {
     if is_white_move {
-        // Absolute interval [alpha, beta] => us-interval [-beta, -alpha].
         (-beta, -alpha)
     } else {
         (alpha, beta)
@@ -395,9 +397,10 @@ pub fn search_moves_opt_cntr(
 // Parallel root search
 // --------------------------------------------------------------------------
 //
-// Only invoked at the root (and once more one ply deeper as part of the
-// existing logic); not performance-critical on a per-node basis, but still
-// benefits from the negamax core.
+// Rayon-parallel evaluation of root candidates. Individual subtrees still
+// run the sequential TT-aware `nega_search`, so all threads share the same
+// transposition table (Hyatt's XOR trick keeps probes internally consistent
+// under Relaxed-ordered atomic writes).
 
 pub fn search_moves_par(
     white: u64,
@@ -426,9 +429,6 @@ pub fn search_moves_par(
         return (u64::MAX, eval_position_with_cfg(white, black, cfg));
     }
 
-    // Pass handling at root preserves the quirks of the previous
-    // implementation: at the root we just return the static eval; elsewhere
-    // we recurse (consuming a ply of depth, matching the prior code).
     if outcome == PASS_OUTCOME {
         if depth == orig_depth {
             return (u64::MAX, eval_position_with_cfg(white, black, cfg));
@@ -447,20 +447,14 @@ pub fn search_moves_par(
         return (u64::MAX, eval);
     }
 
-    // Collect legal moves in plain ascending bit order so that rayon's
-    // `reduce` - which picks the leftmost candidate among equally-valued
-    // moves - behaves identically to the original `find_legal_moves_alt`
-    // based implementation. Bucket ordering matters for alpha-beta move
-    // ordering in the sequential inner search (see `nega_search`), but in
-    // the parallel root every candidate is searched anyway, so using the
-    // same enumeration order as before preserves tie-break semantics.
+    // Plain ascending bit order preserves rayon-reduce tie-break behaviour
+    // w.r.t. the original find_legal_moves_alt-based implementation.
     let mut candidates: Vec<u64> = Vec::new();
     let mut remaining = outcome;
     while remaining != 0 {
         candidates.push(pop_lsb(&mut remaining));
     }
 
-    // Us-frame sign so we can maximise a single scalar in the reduction.
     let sign_us: i32 = if is_white_move { -1 } else { 1 };
 
     let (best_move, _best_eval_us, best_orig_eval) = candidates
@@ -471,7 +465,6 @@ pub fn search_moves_par(
             let child_black = new_black(is_white_move, new_us, new_them);
 
             if orig_depth - depth > 0 {
-                // Non-root: sequential alpha-beta via the negamax core.
                 let (_, orig) = search_moves_opt(
                     child_white,
                     child_black,
@@ -485,7 +478,6 @@ pub fn search_moves_par(
                 let eval_us_local = orig * sign_us;
                 (candidate, eval_us_local, orig)
             } else {
-                // Root-recursion branch preserved from the original.
                 let (_, mut orig) = search_moves_par(
                     child_white,
                     child_black,
@@ -517,8 +509,6 @@ pub fn search_moves_par(
     (best_move, best_orig_eval)
 }
 
-// Helpers for mapping (us, them) pairs back to (white, black) in the parallel
-// root loop without resurrecting a branch inside the hot negamax kernel.
 #[inline(always)]
 fn new_white(is_white_move: bool, new_us: u64, new_them: u64) -> u64 {
     if is_white_move {
@@ -535,4 +525,54 @@ fn new_black(is_white_move: bool, new_us: u64, new_them: u64) -> u64 {
     } else {
         new_us
     }
+}
+
+// --------------------------------------------------------------------------
+// Iterative deepening drivers
+// --------------------------------------------------------------------------
+//
+// The transposition table makes iterative deepening nearly-free: each prior
+// iteration seeds the next with good move ordering (via the TT-move-first
+// probe in `nega_search_impl`), and completed subtrees turn into cutoffs.
+// These helpers are the recommended entry points for game-play code.
+
+pub fn search_iterative(
+    white: u64,
+    black: u64,
+    is_white_move: bool,
+    max_depth: u32,
+    cfg: EvalCfg,
+) -> (u64, i32) {
+    tt().new_age();
+    let mut best = (u64::MAX, 0i32);
+    for d in 1..=max_depth {
+        best = search_moves_par(white, black, is_white_move, d, -20000, 20000, d, cfg);
+    }
+    best
+}
+
+pub fn search_iterative_cntr(
+    white: u64,
+    black: u64,
+    is_white_move: bool,
+    max_depth: u32,
+    cfg: EvalCfg,
+    counter: &mut u64,
+) -> (u64, i32) {
+    tt().new_age();
+    let mut best = (u64::MAX, 0i32);
+    for d in 1..=max_depth {
+        best = search_moves_opt_cntr(
+            white,
+            black,
+            is_white_move,
+            d,
+            -20000,
+            20000,
+            d,
+            cfg,
+            counter,
+        );
+    }
+    best
 }
