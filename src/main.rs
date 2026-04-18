@@ -17,11 +17,14 @@ use engine::*;
 mod utils;
 use utils::*;
 
+#[cfg(feature = "multiplayer")]
 use reversi_engine::multiplayer::api_client::*;
+#[cfg(feature = "multiplayer")]
 use reversi_engine::multiplayer::model::*;
 
 use reversi_engine::cli::args::*;
 
+#[cfg(feature = "multiplayer")]
 use std::{thread, time};
 
 fn generate_opening_book(
@@ -12092,6 +12095,7 @@ fn local_game(args: Args) {
     }
 }
 
+#[cfg(feature = "multiplayer")]
 fn play_multiplayer(args: Args) {
     println!(
         "{} {} {} {}",
@@ -12337,7 +12341,16 @@ fn main() {
     } else if args.api_url == "".to_string() {
         local_game(args);
     } else {
-        play_multiplayer(args);
+        #[cfg(feature = "multiplayer")]
+        {
+            play_multiplayer(args);
+        }
+        #[cfg(not(feature = "multiplayer"))]
+        {
+            let _ = args;
+            eprintln!("multiplayer feature not compiled in; rebuild with --features multiplayer");
+            std::process::exit(2);
+        }
     }
 }
 
