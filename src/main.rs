@@ -20,20 +20,29 @@ use utils::*;
 mod tune;
 use tune::*;
 
-/// Parse a comma-separated `corner,edge,antiedge,anticorner` string
-/// into an `EvalCfg`. Empty input (the CLI default) yields
-/// `DEFAULT_CFG`; unparseable input falls back to `DEFAULT_CFG` with
-/// a stderr note so the caller notices.
+/// Parse a comma-separated coefficient string into an `EvalCfg`.
+/// Expected field order (10 ints):
+///   corner, edge, antiedge, anticorner,
+///   disc_opening, disc_midgame, disc_endgame,
+///   mobility_opening, mobility_midgame, mobility_endgame
+///
+/// Empty input (the CLI default) yields `DEFAULT_CFG`; unparseable
+/// input falls back to `DEFAULT_CFG` with a stderr note so the
+/// caller notices.
 fn parse_coefs_or_default(s: &str) -> EvalCfg {
     if s.is_empty() {
         return DEFAULT_CFG;
     }
     let parts: Vec<&str> = s.split(',').collect();
-    if parts.len() != 4 {
-        eprintln!("parse_coefs: expected 4 comma-separated ints, got {:?}; using DEFAULT_CFG", s);
+    if parts.len() != 10 {
+        eprintln!(
+            "parse_coefs: expected 10 comma-separated ints (corner,edge,antiedge,anticorner,disc_opening,disc_midgame,disc_endgame,mobility_opening,mobility_midgame,mobility_endgame), got {} parts in {:?}; using DEFAULT_CFG",
+            parts.len(),
+            s
+        );
         return DEFAULT_CFG;
     }
-    let mut vals = [0i32; 4];
+    let mut vals = [0i32; 10];
     for (i, p) in parts.iter().enumerate() {
         match p.trim().parse::<i32>() {
             Ok(v) => vals[i] = v,
@@ -48,6 +57,8 @@ fn parse_coefs_or_default(s: &str) -> EvalCfg {
         edge_value: vals[1],
         antiedge_value: vals[2],
         anticorner_value: vals[3],
+        disc_values: [vals[4], vals[5], vals[6]],
+        mobility_values: [vals[7], vals[8], vals[9]],
     }
 }
 
@@ -12348,17 +12359,18 @@ fn main() {
             println!("No opening book save path provided!");
         }
     } else if args.compare_configs {
-        let first: EvalCfg = EvalCfg {
-            corner_value: 70,
-            edge_value: 17,
-            antiedge_value: -22,
-            anticorner_value: -34,
-        };
+        // Two ad-hoc configs used historically as a `compare_configs`
+        // smoke test. `--validate-match` + `--tune-initial-coefs` is
+        // the more flexible path these days, but this branch is
+        // preserved for backwards-compatibility.
+        let first: EvalCfg = DEFAULT_CFG;
         let second: EvalCfg = EvalCfg {
             corner_value: 70,
             edge_value: 17,
             antiedge_value: -20,
             anticorner_value: -30,
+            disc_values: DEFAULT_CFG.disc_values,
+            mobility_values: DEFAULT_CFG.mobility_values,
         };
         println!(
             "The score between first and second configs is {}",

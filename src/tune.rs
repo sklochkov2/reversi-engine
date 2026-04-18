@@ -218,24 +218,48 @@ fn play_game_from_position_silent(
 // (1+1)-ES with 1/5-success rule
 // --------------------------------------------------------------------------
 
+/// Number of tunable scalar parameters in [`EvalCfg`]. Matches the
+/// field enumeration in [`cfg_to_vec`] / [`vec_to_cfg`]; bumping
+/// this requires updating both marshalers and the parser in
+/// `main.rs::parse_coefs_or_default`.
+pub const TUNE_DIM: usize = 10;
+
 /// Marshal [`EvalCfg`] to/from a fixed-length `f64` vector so the
-/// optimizer can work in a uniform parameter space. Keep in sync with
-/// [`EvalCfg`]'s field order.
-fn cfg_to_vec(cfg: &EvalCfg) -> [f64; 4] {
+/// optimizer can work in a uniform parameter space. Parameter order:
+/// corner, edge, antiedge, anticorner, disc[opening],
+/// disc[midgame], disc[endgame], mobility[opening],
+/// mobility[midgame], mobility[endgame].
+fn cfg_to_vec(cfg: &EvalCfg) -> [f64; TUNE_DIM] {
     [
         cfg.corner_value as f64,
         cfg.edge_value as f64,
         cfg.antiedge_value as f64,
         cfg.anticorner_value as f64,
+        cfg.disc_values[0] as f64,
+        cfg.disc_values[1] as f64,
+        cfg.disc_values[2] as f64,
+        cfg.mobility_values[0] as f64,
+        cfg.mobility_values[1] as f64,
+        cfg.mobility_values[2] as f64,
     ]
 }
 
-fn vec_to_cfg(v: &[f64; 4]) -> EvalCfg {
+fn vec_to_cfg(v: &[f64; TUNE_DIM]) -> EvalCfg {
     EvalCfg {
         corner_value: v[0].round() as i32,
         edge_value: v[1].round() as i32,
         antiedge_value: v[2].round() as i32,
         anticorner_value: v[3].round() as i32,
+        disc_values: [
+            v[4].round() as i32,
+            v[5].round() as i32,
+            v[6].round() as i32,
+        ],
+        mobility_values: [
+            v[7].round() as i32,
+            v[8].round() as i32,
+            v[9].round() as i32,
+        ],
     }
 }
 
