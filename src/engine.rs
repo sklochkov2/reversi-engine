@@ -56,6 +56,16 @@ impl Default for KillerTable {
 pub struct SearchCtx {
     pub orig_depth: u32,
     pub cfg: EvalCfg,
+    /// Full-avalanche hash of the active `EvalCfg`. XORed into every
+    /// TT key so different configs get distinct logical partitions of
+    /// the shared TT. This is essential during tuning (where two
+    /// configs alternate within one game) to prevent cross-config
+    /// score pollution: without it, config A's cached heuristic eval
+    /// would be returned to config B's probes as if authoritative,
+    /// producing spurious ~0.5% "wins" that don't reproduce on
+    /// independent validation sets. In production (single-config
+    /// search) this is a no-op since `cfg_key` is constant.
+    pub cfg_key: u64,
     pub node_count: u64,
     pub killers: KillerTable,
 }
@@ -66,10 +76,38 @@ impl SearchCtx {
         Self {
             orig_depth,
             cfg,
+            cfg_key: eval_cfg_key(&cfg),
             node_count: 0,
             killers: KillerTable::new(),
         }
     }
+}
+
+/// Compute a 64-bit full-avalanche key from an [`EvalCfg`]. Used to
+/// partition TT entries by config so cross-config pollution can't
+/// occur (see `SearchCtx::cfg_key`). Any change to the eval function
+/// signature (adding new fields) should be reflected here to keep
+/// the partition complete.
+#[inline]
+pub fn eval_cfg_key(cfg: &EvalCfg) -> u64 {
+    // Pack the four i32 coefficients into two u64s via bit-casting
+    // to u32 then splicing, then mix through splitmix64 twice. This
+    // gives a full-avalanche mapping where a single-coefficient ±1
+    // change propagates through all 64 output bits.
+    let a = ((cfg.corner_value as u32) as u64) | (((cfg.edge_value as u32) as u64) << 32);
+    let b = ((cfg.antiedge_value as u32) as u64)
+        | (((cfg.anticorner_value as u32) as u64) << 32);
+    let m1 = mix64_local(a ^ 0xA2A8_8E47_2F35_8101);
+    let m2 = mix64_local(b ^ 0x59E2_1C1E_D9B5_AF0D);
+    m1.wrapping_add(m2.rotate_left(23))
+}
+
+#[inline]
+fn mix64_local(mut x: u64) -> u64 {
+    x = x.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    x ^ (x >> 31)
 }
 
 // Special return codes from `check_game_status`. Anything below `PASS_OUTCOME`
@@ -134,7 +172,7 @@ pub fn find_legal_moves_alt(white: u64, black: u64, is_white_to_move: bool) -> V
 // Static evaluation
 // --------------------------------------------------------------------------
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EvalCfg {
     pub corner_value: i32,
     pub edge_value: i32,
@@ -227,7 +265,9 @@ fn nega_search_impl<const COUNT: bool>(
     }
 
     // ---- TT probe -------------------------------------------------------
-    let key = hash_position(us, them);
+    // XOR in `cfg_key` so different eval configs access disjoint TT
+    // slots (see `SearchCtx::cfg_key` for rationale).
+    let key = hash_position(us, them) ^ ctx.cfg_key;
     let mut tt_move_bit: u64 = 0;
     let mut a = alpha;
     let mut b = beta;

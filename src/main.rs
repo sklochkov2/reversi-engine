@@ -17,6 +17,40 @@ use engine::*;
 mod utils;
 use utils::*;
 
+mod tune;
+use tune::*;
+
+/// Parse a comma-separated `corner,edge,antiedge,anticorner` string
+/// into an `EvalCfg`. Empty input (the CLI default) yields
+/// `DEFAULT_CFG`; unparseable input falls back to `DEFAULT_CFG` with
+/// a stderr note so the caller notices.
+fn parse_coefs_or_default(s: &str) -> EvalCfg {
+    if s.is_empty() {
+        return DEFAULT_CFG;
+    }
+    let parts: Vec<&str> = s.split(',').collect();
+    if parts.len() != 4 {
+        eprintln!("parse_coefs: expected 4 comma-separated ints, got {:?}; using DEFAULT_CFG", s);
+        return DEFAULT_CFG;
+    }
+    let mut vals = [0i32; 4];
+    for (i, p) in parts.iter().enumerate() {
+        match p.trim().parse::<i32>() {
+            Ok(v) => vals[i] = v,
+            Err(_) => {
+                eprintln!("parse_coefs: non-integer element {:?} in {:?}; using DEFAULT_CFG", p, s);
+                return DEFAULT_CFG;
+            }
+        }
+    }
+    EvalCfg {
+        corner_value: vals[0],
+        edge_value: vals[1],
+        antiedge_value: vals[2],
+        anticorner_value: vals[3],
+    }
+}
+
 #[cfg(feature = "multiplayer")]
 use reversi_engine::multiplayer::api_client::*;
 #[cfg(feature = "multiplayer")]
@@ -12338,6 +12372,45 @@ fn main() {
             args.benchmark_endgame_positions,
             args.benchmark_endgame_empties,
         );
+    } else if args.tune_eval || args.validate_match {
+        let initial_cfg = parse_coefs_or_default(&args.tune_initial_coefs);
+        let positions = generate_ply_positions(args.tune_ply);
+        if args.validate_match {
+            println!(
+                "validate_match: candidate={:?} vs DEFAULT_CFG={:?} at depth {} over {} positions",
+                initial_cfg,
+                DEFAULT_CFG,
+                args.search_depth,
+                positions.len()
+            );
+            let score = run_match(initial_cfg, DEFAULT_CFG, args.search_depth, &positions);
+            let max = (positions.len() as i32) * 4;
+            println!(
+                "validate_match: score {:+} / {} ({:+.2}%)",
+                score,
+                max,
+                100.0 * score as f64 / max as f64
+            );
+        } else {
+            let (train, val) = split_positions(&positions, args.tune_train_frac);
+            println!(
+                "tune: generated {} positions at ply {} -> train={} val={}",
+                positions.len(),
+                args.tune_ply,
+                train.len(),
+                val.len()
+            );
+            let tuned = tune_eval(
+                initial_cfg,
+                &train,
+                &val,
+                args.search_depth,
+                args.tune_iterations,
+                args.tune_seed,
+                args.tune_sigma,
+            );
+            println!("\ntune: final config = {:?}", tuned);
+        }
     } else if args.api_url == "".to_string() {
         local_game(args);
     } else {
