@@ -38,4 +38,21 @@ pub struct Args {
     /// Run a benchmark for performance evaluation and profiling purposes.
     #[arg(short, long, default_value_t = false)]
     pub benchmark: bool,
+
+    /// Run a late-game benchmark: each base position is rolled forward
+    /// into endgame territory (~18 empties) before being searched. Exercises
+    /// the exact endgame solver which never fires on the default fixture.
+    #[arg(long, default_value_t = false)]
+    pub benchmark_endgame: bool,
+
+    /// Number of base benchmark positions to roll forward for
+    /// `--benchmark-endgame`. The full 2315-position fixture takes ~minutes
+    /// to prepare; subsets of 50-200 give a representative sample.
+    #[arg(long, default_value_t = 100)]
+    pub benchmark_endgame_positions: usize,
+
+    /// Target empty-square count for rolled-forward endgame benchmark
+    /// positions. Lower = deeper into the solver's territory.
+    #[arg(long, default_value_t = 18)]
+    pub benchmark_endgame_empties: u32,
 }

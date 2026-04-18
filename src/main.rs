@@ -284,8 +284,8 @@ fn compare_configs(first: EvalCfg, second: EvalCfg, depth: u32) -> i32 {
     outcome
 }
 
-fn benchmark(depth: u32) -> i32 {
-    let queue: Vec<Position> = vec![
+fn benchmark_positions_into(out: &mut Vec<Position>) {
+    *out = vec![
         Position {
             white: 68719476736,
             black: 34762915840,
@@ -11862,6 +11862,11 @@ fn benchmark(depth: u32) -> i32 {
             white_to_move: false,
         },
     ];
+}
+
+fn benchmark(depth: u32) -> i32 {
+    let mut queue: Vec<Position> = Vec::new();
+    benchmark_positions_into(&mut queue);
     println!(
         "Evaluating engine performance over {} positions",
         queue.len()
@@ -11877,6 +11882,110 @@ fn benchmark(depth: u32) -> i32 {
         now.elapsed().unwrap().as_millis()
     );
     return 0;
+}
+
+/// Roll `pos` forward until it has at most `target_empties` empty squares,
+/// playing the best move at `rollout_depth` on each side. Returns `None`
+/// if the game ends before reaching the target (unlikely for reasonable
+/// targets but possible if `target_empties` is small and play transits a
+/// forced terminal).
+fn roll_forward_to_empties(
+    pos: Position,
+    target_empties: u32,
+    rollout_depth: u32,
+) -> Option<Position> {
+    let mut white = pos.white;
+    let mut black = pos.black;
+    let mut white_to_move = pos.white_to_move;
+    const BLACK_WON: u64 = u64::MAX - 1;
+    const WHITE_WON: u64 = u64::MAX - 2;
+    const DRAWN_GAME: u64 = u64::MAX - 3;
+    loop {
+        let empties = (!(white | black)).count_ones();
+        if empties <= target_empties {
+            return Some(Position {
+                white,
+                black,
+                white_to_move,
+            });
+        }
+        match check_game_status(white, black, white_to_move) {
+            u64::MAX => {
+                white_to_move = !white_to_move;
+            }
+            BLACK_WON | WHITE_WON | DRAWN_GAME => {
+                return None;
+            }
+            _ => {
+                let (best_move, _) = search_moves_opt(
+                    white,
+                    black,
+                    white_to_move,
+                    rollout_depth,
+                    -20000,
+                    20000,
+                    rollout_depth,
+                    DEFAULT_CFG,
+                );
+                match apply_move(white, black, best_move, white_to_move) {
+                    Ok((w, b)) => {
+                        white = w;
+                        black = b;
+                        white_to_move = !white_to_move;
+                    }
+                    Err(_) => return None,
+                }
+            }
+        }
+    }
+}
+
+fn benchmark_endgame(depth: u32, max_positions: usize, target_empties: u32) -> i32 {
+    let base_queue: Vec<Position> = benchmark_positions();
+    let take = max_positions.min(base_queue.len());
+    println!(
+        "Rolling {} base positions forward to <= {} empties (this may take a moment)...",
+        take, target_empties
+    );
+    // The rollout TT is shared; clear it before and after so the timed
+    // search below isn't polluted by warm-up entries.
+    tt::tt().clear();
+    let rollout_depth = 4;
+    let rolled: Vec<Position> = base_queue
+        .into_iter()
+        .take(take)
+        .filter_map(|p| roll_forward_to_empties(p, target_empties, rollout_depth))
+        .collect();
+    tt::tt().clear();
+    println!(
+        "Evaluating engine performance over {} late-game positions (avg empties: {:.1})",
+        rolled.len(),
+        rolled
+            .iter()
+            .map(|p| (!(p.white | p.black)).count_ones() as f64)
+            .sum::<f64>()
+            / rolled.len().max(1) as f64
+    );
+    let mut total: u64 = 0;
+    let now = SystemTime::now();
+    for pos in rolled {
+        total += evaluate_position(depth, pos);
+    }
+    println!(
+        "Evaluated {} nodes over {} ms",
+        total,
+        now.elapsed().unwrap().as_millis()
+    );
+    0
+}
+
+/// The fixed set of benchmark starting positions, extracted so the
+/// endgame-rollout benchmark can reuse it without duplicating ~11k lines
+/// of position literals.
+fn benchmark_positions() -> Vec<Position> {
+    let mut out = Vec::new();
+    benchmark_positions_into(&mut out);
+    out
 }
 
 fn local_game(args: Args) {
@@ -12219,6 +12328,12 @@ fn main() {
         );
     } else if args.benchmark {
         benchmark(args.search_depth);
+    } else if args.benchmark_endgame {
+        benchmark_endgame(
+            args.search_depth,
+            args.benchmark_endgame_positions,
+            args.benchmark_endgame_empties,
+        );
     } else if args.api_url == "".to_string() {
         local_game(args);
     } else {

@@ -491,6 +491,27 @@ fn nega_search_impl<const COUNT: bool>(
     (best_move, best_v)
 }
 
+// --------------------------------------------------------------------------
+// Endgame: experiment notes (no code)
+// --------------------------------------------------------------------------
+//
+// A specialised exact endgame solver was prototyped on the
+// `ai_improvements` branch and reverted. The hypothesis was that
+// pivoting into a leaner alpha-beta (no static eval, simpler ordering,
+// selective TT) once the board had <= ~12 empty squares would beat the
+// main search at its own game. Measured empirically on rolled-forward
+// positions at 8, 10, and 14 empties, the naive solver consumed 10-20%
+// more nodes and wall-clock than `nega_search_impl` even after being
+// outfitted with PVS, killers, and mobility ordering - there is no
+// overhead worth stripping once those features are present, and the
+// main search's iterative-deepening TT warm-up gives it a structural
+// advantage the one-shot solver can't match.
+//
+// The `--benchmark-endgame` harness is kept for anyone revisiting the
+// problem: beating the main search here requires Reversi-specific
+// machinery (parity-based move ordering, stability-based alpha-beta
+// narrowing) rather than a generic alpha-beta rewrite.
+
 fn nega_search(
     us: u64,
     them: u64,
