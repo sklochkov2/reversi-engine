@@ -47,6 +47,31 @@ impl Default for KillerTable {
     }
 }
 
+// Per-search context. Everything that's constant or monotonically mutable
+// over the whole search is bundled here and passed by `&mut` through the
+// recursion. This keeps the hot `nega_search_impl` signature at 6
+// arguments (us, them, depth, alpha, beta, ctx) - all sysv-abi register
+// candidates - and spares each recursive call from re-shuffling four
+// extra values onto the stack frame.
+pub struct SearchCtx {
+    pub orig_depth: u32,
+    pub cfg: EvalCfg,
+    pub node_count: u64,
+    pub killers: KillerTable,
+}
+
+impl SearchCtx {
+    #[inline(always)]
+    pub fn new(orig_depth: u32, cfg: EvalCfg) -> Self {
+        Self {
+            orig_depth,
+            cfg,
+            node_count: 0,
+            killers: KillerTable::new(),
+        }
+    }
+}
+
 // Special return codes from `check_game_status`. Anything below `PASS_OUTCOME`
 // is an actual move bitmap.
 const DRAW_OUTCOME: u64 = u64::MAX - 3;
@@ -172,14 +197,12 @@ fn nega_search_impl<const COUNT: bool>(
     depth: u32,
     alpha: i32,
     beta: i32,
-    orig_depth: u32,
-    cfg: EvalCfg,
-    counter: &mut u64,
-    killers: &mut KillerTable,
+    ctx: &mut SearchCtx,
 ) -> (u64, i32) {
     if COUNT {
-        *counter += 1;
+        ctx.node_count += 1;
     }
+    let orig_depth = ctx.orig_depth;
 
     let outcome = game_status_us_them(us, them);
 
@@ -195,14 +218,12 @@ fn nega_search_impl<const COUNT: bool>(
         }
         // Pass: swap sides without consuming depth, then negate child's
         // score back into our frame.
-        let (_, child) = nega_search_impl::<COUNT>(
-            them, us, depth, -beta, -alpha, orig_depth, cfg, counter, killers,
-        );
+        let (_, child) = nega_search_impl::<COUNT>(them, us, depth, -beta, -alpha, ctx);
         return (u64::MAX, -child);
     }
 
     if depth == 0 {
-        return (u64::MAX, eval_us_them(us, them, cfg));
+        return (u64::MAX, eval_us_them(us, them, ctx.cfg));
     }
 
     // ---- TT probe -------------------------------------------------------
@@ -255,8 +276,8 @@ fn nega_search_impl<const COUNT: bool>(
     // Killer-move slots for this ply (clamped against the static table size
     // so absurdly deep ID targets don't OOB).
     let ply_idx = (orig_depth.saturating_sub(depth) as usize).min(KILLER_PLIES - 1);
-    let k0_raw = killers.0[ply_idx][0];
-    let k1_raw = killers.0[ply_idx][1];
+    let k0_raw = ctx.killers.0[ply_idx][0];
+    let k1_raw = ctx.killers.0[ply_idx][1];
     let killer0 = if k0_raw != 0 && k0_raw != tt_move_bit && (outcome & k0_raw) != 0 {
         k0_raw
     } else {
@@ -298,10 +319,7 @@ fn nega_search_impl<const COUNT: bool>(
                     depth - 1,
                     -b,
                     -a,
-                    orig_depth,
-                    cfg,
-                    counter,
-                    killers,
+                    ctx,
                 );
                 cv
             } else {
@@ -311,10 +329,7 @@ fn nega_search_impl<const COUNT: bool>(
                     depth - 1,
                     -a - 1,
                     -a,
-                    orig_depth,
-                    cfg,
-                    counter,
-                    killers,
+                    ctx,
                 );
                 let tentative = adjust_mate_distance(-cv);
                 if tentative > a && tentative < b && a + 1 < b {
@@ -324,10 +339,7 @@ fn nega_search_impl<const COUNT: bool>(
                         depth - 1,
                         -b,
                         -a,
-                        orig_depth,
-                        cfg,
-                        counter,
-                        killers,
+                        ctx,
                     );
                     cv2
                 } else {
@@ -346,10 +358,10 @@ fn nega_search_impl<const COUNT: bool>(
                     // Record the cutoff move as a killer at this ply, unless
                     // it's already slot 0 (so the two slots are always
                     // distinct). Slot 0 shifts to slot 1 (a tiny LRU).
-                    let cur_k0 = killers.0[ply_idx][0];
+                    let cur_k0 = ctx.killers.0[ply_idx][0];
                     if candidate != cur_k0 {
-                        killers.0[ply_idx][1] = cur_k0;
-                        killers.0[ply_idx][0] = candidate;
+                        ctx.killers.0[ply_idx][1] = cur_k0;
+                        ctx.killers.0[ply_idx][0] = candidate;
                     }
                     tt().store(
                         key,
@@ -488,11 +500,8 @@ fn nega_search(
     orig_depth: u32,
     cfg: EvalCfg,
 ) -> (u64, i32) {
-    let mut dummy = 0u64;
-    let mut killers = KillerTable::new();
-    nega_search_impl::<false>(
-        us, them, depth, alpha, beta, orig_depth, cfg, &mut dummy, &mut killers,
-    )
+    let mut ctx = SearchCtx::new(orig_depth, cfg);
+    nega_search_impl::<false>(us, them, depth, alpha, beta, &mut ctx)
 }
 
 fn nega_search_cntr(
@@ -505,10 +514,10 @@ fn nega_search_cntr(
     cfg: EvalCfg,
     counter: &mut u64,
 ) -> (u64, i32) {
-    let mut killers = KillerTable::new();
-    nega_search_impl::<true>(
-        us, them, depth, alpha, beta, orig_depth, cfg, counter, &mut killers,
-    )
+    let mut ctx = SearchCtx::new(orig_depth, cfg);
+    let result = nega_search_impl::<true>(us, them, depth, alpha, beta, &mut ctx);
+    *counter += ctx.node_count;
+    result
 }
 
 // --------------------------------------------------------------------------
