@@ -2,7 +2,7 @@ use rayon::prelude::*;
 use reversi_tools::position::*;
 
 use crate::tt::{
-    hash_position, tt, TTData, BOUND_EXACT, BOUND_LOWER, BOUND_NONE, BOUND_UPPER, NO_MOVE_SQ,
+    hash_position, tt, BOUND_EXACT, BOUND_LOWER, BOUND_NONE, BOUND_UPPER, NO_MOVE_SQ,
 };
 
 // --------------------------------------------------------------------------
@@ -22,6 +22,30 @@ const MATE_THRESHOLD: i32 = 5000;
 // `compute_moves`-per-candidate cost of mobility-based ordering exceeds the
 // pruning savings, so we fall back to the cheap bucket ordering.
 const MOBILITY_ORDER_MIN_DEPTH: u32 = 3;
+
+// Killer-move table: two slots per ply, remembering the moves that most
+// recently caused a beta cutoff at that ply in a sibling subtree. After
+// the TT move (which is per-position), killers are the next candidates
+// to try, since similar positions at the same ply tend to share refutation
+// moves. `KILLER_PLIES` must exceed the deepest iterative-deepening depth
+// the engine is ever asked to run - 64 is more than enough for 8x8 Othello.
+const KILLER_PLIES: usize = 64;
+
+#[derive(Copy, Clone)]
+pub struct KillerTable([[u64; 2]; KILLER_PLIES]);
+
+impl KillerTable {
+    #[inline(always)]
+    pub fn new() -> Self {
+        Self([[0u64; 2]; KILLER_PLIES])
+    }
+}
+
+impl Default for KillerTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 // Special return codes from `check_game_status`. Anything below `PASS_OUTCOME`
 // is an actual move bitmap.
@@ -151,6 +175,7 @@ fn nega_search_impl<const COUNT: bool>(
     orig_depth: u32,
     cfg: EvalCfg,
     counter: &mut u64,
+    killers: &mut KillerTable,
 ) -> (u64, i32) {
     if COUNT {
         *counter += 1;
@@ -171,7 +196,7 @@ fn nega_search_impl<const COUNT: bool>(
         // Pass: swap sides without consuming depth, then negate child's
         // score back into our frame.
         let (_, child) = nega_search_impl::<COUNT>(
-            them, us, depth, -beta, -alpha, orig_depth, cfg, counter,
+            them, us, depth, -beta, -alpha, orig_depth, cfg, counter, killers,
         );
         return (u64::MAX, -child);
     }
@@ -227,6 +252,29 @@ fn nega_search_impl<const COUNT: bool>(
     // move loop - used for final bound classification.
     let alpha_used = a;
 
+    // Killer-move slots for this ply (clamped against the static table size
+    // so absurdly deep ID targets don't OOB).
+    let ply_idx = (orig_depth.saturating_sub(depth) as usize).min(KILLER_PLIES - 1);
+    let k0_raw = killers.0[ply_idx][0];
+    let k1_raw = killers.0[ply_idx][1];
+    let killer0 = if k0_raw != 0 && k0_raw != tt_move_bit && (outcome & k0_raw) != 0 {
+        k0_raw
+    } else {
+        0
+    };
+    let killer1 = if k1_raw != 0
+        && k1_raw != tt_move_bit
+        && k1_raw != killer0
+        && (outcome & k1_raw) != 0
+    {
+        k1_raw
+    } else {
+        0
+    };
+    // Moves already tried via TT / killer slots - exclude them from the
+    // ordered-remainder pass so we don't re-search duplicates.
+    let already_tried = tt_move_bit | killer0 | killer1;
+
     let mut best_move: u64 = u64::MAX;
     let mut best_v: i32 = i32::MIN;
     // `searched_any` controls Principal Variation Search: the first move at
@@ -253,6 +301,7 @@ fn nega_search_impl<const COUNT: bool>(
                     orig_depth,
                     cfg,
                     counter,
+                    killers,
                 );
                 cv
             } else {
@@ -265,6 +314,7 @@ fn nega_search_impl<const COUNT: bool>(
                     orig_depth,
                     cfg,
                     counter,
+                    killers,
                 );
                 let tentative = adjust_mate_distance(-cv);
                 if tentative > a && tentative < b && a + 1 < b {
@@ -277,6 +327,7 @@ fn nega_search_impl<const COUNT: bool>(
                         orig_depth,
                         cfg,
                         counter,
+                        killers,
                     );
                     cv2
                 } else {
@@ -292,6 +343,14 @@ fn nega_search_impl<const COUNT: bool>(
                     a = v;
                 }
                 if a >= b {
+                    // Record the cutoff move as a killer at this ply, unless
+                    // it's already slot 0 (so the two slots are always
+                    // distinct). Slot 0 shifts to slot 1 (a tiny LRU).
+                    let cur_k0 = killers.0[ply_idx][0];
+                    if candidate != cur_k0 {
+                        killers.0[ply_idx][1] = cur_k0;
+                        killers.0[ply_idx][0] = candidate;
+                    }
                     tt().store(
                         key,
                         v,
@@ -318,6 +377,14 @@ fn nega_search_impl<const COUNT: bool>(
         try_move!(tt_move_bit);
     }
 
+    // Then the killers (if legal, distinct, and not the TT move).
+    if killer0 != 0 {
+        try_move!(killer0);
+    }
+    if killer1 != 0 {
+        try_move!(killer1);
+    }
+
     // For the remaining moves we have two ordering strategies:
     //   (a) Deep nodes (depth >= 3): sort candidates by opponent mobility
     //       after the move, with positional biases. Paying `compute_moves`
@@ -342,7 +409,7 @@ fn nega_search_impl<const COUNT: bool>(
             new_them: 0,
         }; 32];
         let mut n = 0usize;
-        let mut remaining = outcome & !tt_move_bit;
+        let mut remaining = outcome & !already_tried;
         while remaining != 0 {
             let candidate = pop_lsb(&mut remaining);
             let (new_us_c, new_them_c) = apply_move_us_them(us, them, candidate);
@@ -374,11 +441,12 @@ fn nega_search_impl<const COUNT: bool>(
             try_move_cached!(s.candidate, s.new_us, s.new_them);
         }
     } else {
-        let mut corner_moves = outcome & CORNER_MASK & !tt_move_bit;
-        let mut edge_moves = outcome & EDGE_MASK & !ANTIEDGE_MASK & !tt_move_bit;
-        let mut other_moves =
-            outcome & !(CORNER_MASK | EDGE_MASK | ANTIEDGE_MASK | ANTICORNER_MASK) & !tt_move_bit;
-        let mut bad_moves = outcome & (ANTIEDGE_MASK | ANTICORNER_MASK) & !tt_move_bit;
+        let mut corner_moves = outcome & CORNER_MASK & !already_tried;
+        let mut edge_moves = outcome & EDGE_MASK & !ANTIEDGE_MASK & !already_tried;
+        let mut other_moves = outcome
+            & !(CORNER_MASK | EDGE_MASK | ANTIEDGE_MASK | ANTICORNER_MASK)
+            & !already_tried;
+        let mut bad_moves = outcome & (ANTIEDGE_MASK | ANTICORNER_MASK) & !already_tried;
 
         macro_rules! run_bucket {
             ($moves:ident) => {
@@ -421,7 +489,10 @@ fn nega_search(
     cfg: EvalCfg,
 ) -> (u64, i32) {
     let mut dummy = 0u64;
-    nega_search_impl::<false>(us, them, depth, alpha, beta, orig_depth, cfg, &mut dummy)
+    let mut killers = KillerTable::new();
+    nega_search_impl::<false>(
+        us, them, depth, alpha, beta, orig_depth, cfg, &mut dummy, &mut killers,
+    )
 }
 
 fn nega_search_cntr(
@@ -434,7 +505,10 @@ fn nega_search_cntr(
     cfg: EvalCfg,
     counter: &mut u64,
 ) -> (u64, i32) {
-    nega_search_impl::<true>(us, them, depth, alpha, beta, orig_depth, cfg, counter)
+    let mut killers = KillerTable::new();
+    nega_search_impl::<true>(
+        us, them, depth, alpha, beta, orig_depth, cfg, counter, &mut killers,
+    )
 }
 
 // --------------------------------------------------------------------------
