@@ -48,7 +48,11 @@ pub fn join_game(args: &Args, game_uuid: String) -> Result<GameJoinResult, ureq:
     Ok(joined_game.result)
 }
 
-pub fn make_move(args: &Args, game_uuid: String, our_move: String) -> Result<MoveResult, ureq::Error> {
+pub fn make_move(
+    args: &Args,
+    game_uuid: String,
+    our_move: String,
+) -> Result<MoveResult, ureq::Error> {
     let api_endpoint: String = args.api_url.clone() + "reversi/v1/move";
     let move_request: MoveRequest = MoveRequest {
         player_id: args.player_uuid.clone(),
