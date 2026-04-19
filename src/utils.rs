@@ -97,3 +97,18 @@ pub fn apply_move_verbose(
     print_board(next_white, next_black, move_bit, flips, true);
     Ok((next_white, next_black))
 }
+
+// --------------------------------------------------------------------------
+// SplitMix64 (finalizer / PRNG step)
+// --------------------------------------------------------------------------
+
+/// One round of SplitMix64 (MurmurHash3 finalizer constants). Used for
+/// TT position keys, [`crate::engine::eval_cfg_key`], and deterministic
+/// tuning hashes — keep a single body so constants cannot drift apart.
+#[inline(always)]
+pub fn splitmix64(mut x: u64) -> u64 {
+    x = x.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    x ^ (x >> 31)
+}

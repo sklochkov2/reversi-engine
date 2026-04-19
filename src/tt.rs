@@ -18,6 +18,8 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::utils::splitmix64;
+
 pub const BOUND_NONE: u8 = 0;
 pub const BOUND_EXACT: u8 = 1;
 pub const BOUND_LOWER: u8 = 2; // true score >= stored
@@ -176,20 +178,12 @@ fn prev_power_of_two(n: usize) -> usize {
 // --------------------------------------------------------------------------
 
 #[inline(always)]
-fn mix64(mut x: u64) -> u64 {
-    x = x.wrapping_add(0x9E37_79B9_7F4A_7C15);
-    x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-    x ^ (x >> 31)
-}
-
-#[inline(always)]
 pub fn hash_position(us: u64, them: u64) -> u64 {
     // Two full-avalanche splitmix64 mixes, combined asymmetrically so that
     // `hash_position(us, them) != hash_position(them, us)` and the side-to-
     // move is implicitly encoded in the slot.
-    let a = mix64(us);
-    let b = mix64(them);
+    let a = splitmix64(us);
+    let b = splitmix64(them);
     a ^ b.rotate_left(17)
 }
 
