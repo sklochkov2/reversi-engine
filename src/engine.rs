@@ -789,12 +789,16 @@ pub fn search_moves_par(
         if depth == orig_depth {
             return (u64::MAX, eval_position_with_cfg(white, black, cfg));
         }
-        let next_depth = depth.saturating_sub(1);
+        // Must match `nega_search_impl`: a pass swaps sides without
+        // consuming a ply of the remaining search budget. Using
+        // `depth - 1` here was a bug — it made the parallel root path
+        // one ply shallower than `search_moves_opt` / `nega_search`
+        // for the same position after a pass.
         let (_, eval) = search_moves_opt(
             white,
             black,
             !is_white_move,
-            next_depth,
+            depth,
             alpha,
             beta,
             orig_depth,
